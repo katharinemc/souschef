@@ -1,0 +1,66 @@
+# =============================================================================
+# Meal Planner — Configuration
+# =============================================================================
+# Copy this file to config.yaml and fill in your values.
+# Lines starting with # are comments and are ignored.
+
+# -----------------------------------------------------------------------------
+# Google OAuth credentials
+# Both Calendar and Gmail use the same credentials file.
+# See setup instructions in calendar_reader.py for how to create these.
+# -----------------------------------------------------------------------------
+credentials_path: credentials.json   # Downloaded from Google Cloud Console
+token_path: token.json               # Auto-created on first run (do not commit)
+
+# -----------------------------------------------------------------------------
+# Email
+# -----------------------------------------------------------------------------
+email:
+  to_address: your@email.com         # Where the Thursday plan is delivered
+
+# -----------------------------------------------------------------------------
+# Google Calendar
+# -----------------------------------------------------------------------------
+calendar:
+  calendar_id: "McLeod Family G-Cal"  # exact calendar name or ID
+  timezone: America/New_York         # IANA timezone — must match your calendar
+
+  # Only events with these prefixes trigger cooking restrictions
+  cook_event_prefixes:
+    - KRM
+    - Family
+
+  # Events with these prefixes are always ignored
+  ignore_prefixes:
+    - SGM
+
+  # Orthodox fasting day marker: a 30-minute event at 5am with this exact title
+  fasting_event_title: "fasting"     # case-insensitive
+  fasting_event_hour: 5              # hour of day (0-23)
+
+# -----------------------------------------------------------------------------
+# Planner
+# -----------------------------------------------------------------------------
+planner:
+  recipe_dir: recipes_yaml           # Directory containing your .yaml recipe files
+  lunch_file: lunches.yaml           # Your manually-maintained lunch rotation file
+  db_path: meal_planner.db           # SQLite state database (auto-created)
+
+  # Cook night targeting
+  target_cook_nights: 3              # Default cook nights per week
+  light_week_threshold: 1            # If no-cook weekdays <= this, target bumps to 4
+
+# -----------------------------------------------------------------------------
+# Anthropic API
+# Used for: recipe ingestion, stacking analysis, reply intent parsing
+# Set via environment variable (preferred) or directly here.
+# -----------------------------------------------------------------------------
+anthropic:
+  # api_key: sk-ant-...              # Better: set ANTHROPIC_API_KEY env variable
+  model: claude-sonnet-4-20250514
+
+# -----------------------------------------------------------------------------
+# Reply handler
+# -----------------------------------------------------------------------------
+reply_handler:
+  poll_interval_seconds: 3600        # How often to check for replies (1 hour)

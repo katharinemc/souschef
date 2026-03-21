@@ -1,0 +1,9 @@
+token.json
+credentials.json
+config.yaml
+*.db
+__pycache__/
+*.pyc
+.env
+
+.venv/
