@@ -527,6 +527,7 @@ class ReplyHandler:
             week_key=plan_dict["week_key"],
             cook_nights=plan_dict.get("cook_nights", 0),
             warnings=list(plan_dict.get("warnings", [])),
+            rationale=plan_dict.get("rationale", ""),
         )
 
         for d in plan_dict.get("dinners", []):
@@ -541,6 +542,8 @@ class ReplyHandler:
                 is_no_cook=d.get("is_no_cook", False),
                 is_meatless=d.get("is_meatless", False),
                 is_fasting=d.get("is_fasting", False),
+                note_type=d.get("note_type"),
+                note_text=d.get("note_text"),
             )
             plan.dinners.append(slot)
 
@@ -554,6 +557,8 @@ class ReplyHandler:
                 tags=[],
                 ingredients=list(lunch_dict.get("ingredients") or []),
                 notes=list(lunch_dict.get("notes") or []),
+                note_type=lunch_dict.get("note_type"),
+                note_text=lunch_dict.get("note_text"),
             )
 
         return plan

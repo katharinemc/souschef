@@ -66,6 +66,8 @@ class MealSlot:
     is_no_cook:  bool = False
     is_meatless: bool = False
     is_fasting:  bool = False
+    note_type:   Optional[str] = None   # 'out' or 'cook' — None for recipe/no-cook slots
+    note_text:   Optional[str] = None   # freeform label text for note slots
 
     @property
     def weekday_name(self) -> str:
@@ -91,6 +93,7 @@ class WeekPlan:
     lunch:             Optional[MealSlot] = None
     cook_nights:       int = 0
     warnings:          list[str] = field(default_factory=list)
+    rationale:         str = ""
 
     def get_dinner(self, d: date) -> Optional[MealSlot]:
         for slot in self.dinners:
@@ -105,6 +108,7 @@ class WeekPlan:
             "week_key":          self.week_key,
             "cook_nights":       self.cook_nights,
             "warnings":          self.warnings,
+            "rationale":         self.rationale,
             "dinners": [
                 {
                     "date":        s.date.isoformat(),
@@ -117,15 +121,19 @@ class WeekPlan:
                     "is_no_cook":  s.is_no_cook,
                     "is_meatless": s.is_meatless,
                     "is_fasting":  s.is_fasting,
+                    "note_type":   s.note_type,
+                    "note_text":   s.note_text,
                     "ingredients": s.ingredients,
                 }
                 for s in self.dinners
             ],
             "lunch": {
-                "lunch_id":   self.lunch.recipe_id,
-                "label":      self.lunch.label,
-                "notes":      self.lunch.notes,
+                "lunch_id":    self.lunch.recipe_id,
+                "label":       self.lunch.label,
+                "notes":       self.lunch.notes,
                 "ingredients": self.lunch.ingredients,
+                "note_type":   self.lunch.note_type,
+                "note_text":   self.lunch.note_text,
             } if self.lunch else None,
         }
 
