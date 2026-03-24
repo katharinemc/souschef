@@ -24,7 +24,7 @@ import json
 import sqlite3
 import logging
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -72,6 +72,22 @@ CREATE INDEX IF NOT EXISTS idx_planned_meals_week
 
 CREATE INDEX IF NOT EXISTS idx_planned_meals_date
     ON planned_meals(meal_date);
+
+CREATE TABLE IF NOT EXISTS experiment_ratings (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_id       TEXT NOT NULL,
+    rated_at        TEXT NOT NULL,
+    stars           INTEGER NOT NULL CHECK (stars BETWEEN 1 AND 5),
+    promoted        INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS meal_notes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    week_key        TEXT NOT NULL,
+    meal_date       TEXT NOT NULL,
+    note_type       TEXT NOT NULL CHECK (note_type IN ('out', 'cook')),
+    note_text       TEXT NOT NULL
+);
 """
 
 
@@ -212,7 +228,6 @@ class StateStore:
                           meal_date, slot, recipe_id, label, tags, ingredients
             created_at: ISO datetime string; defaults to now
         """
-        from datetime import datetime
         if created_at is None:
             created_at = datetime.now().isoformat(timespec="seconds")
 
@@ -357,6 +372,66 @@ class StateStore:
     def purge_now(self):
         """Manually trigger a history purge. Useful in tests."""
         self._purge_old_history()
+
+    # -----------------------------------------------------------------------
+    # Experiment ratings
+    # -----------------------------------------------------------------------
+
+    def record_experiment_rating(
+        self,
+        recipe_id: str,
+        stars: int,
+        promoted: bool = False,
+    ):
+        """Record a star rating for an experiment recipe."""
+        rated_at = datetime.now().isoformat(timespec="seconds")
+        with self._transaction():
+            self._conn.execute("""
+                INSERT INTO experiment_ratings (recipe_id, rated_at, stars, promoted)
+                VALUES (?, ?, ?, ?)
+            """, (recipe_id, rated_at, stars, int(promoted)))
+        log.info("Recorded %d-star rating for %s", stars, recipe_id)
+
+    def get_experiment_ratings(self, recipe_id: str) -> list[dict]:
+        """Return all ratings for a recipe, oldest first."""
+        rows = self._conn.execute(
+            "SELECT recipe_id, rated_at, stars, promoted FROM experiment_ratings "
+            "WHERE recipe_id = ? ORDER BY rated_at ASC",
+            (recipe_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def promote_experiment(self, recipe_id: str):
+        """Set promoted=1 on the latest rating for this recipe."""
+        with self._transaction():
+            self._conn.execute("""
+                UPDATE experiment_ratings
+                SET promoted = 1
+                WHERE recipe_id = ?
+                  AND id = (
+                      SELECT MAX(id) FROM experiment_ratings WHERE recipe_id = ?
+                  )
+            """, (recipe_id, recipe_id))
+        log.info("Promoted experiment recipe: %s", recipe_id)
+
+    # -----------------------------------------------------------------------
+    # Meal notes
+    # -----------------------------------------------------------------------
+
+    def record_meal_note(
+        self,
+        week_key: str,
+        meal_date: str,
+        note_type: str,
+        note_text: str,
+    ):
+        """Persist a freeform meal note (out or cook type)."""
+        with self._transaction():
+            self._conn.execute("""
+                INSERT INTO meal_notes (week_key, meal_date, note_type, note_text)
+                VALUES (?, ?, ?, ?)
+            """, (week_key, meal_date, note_type, note_text))
+        log.info("Recorded %s note for %s: %s", note_type, meal_date, note_text)
 
     # -----------------------------------------------------------------------
     # Debug / inspection
