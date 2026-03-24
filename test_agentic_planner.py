@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent))
 
 from calendar_reader import WeekConstraints, DayConstraints
+from planner import WeekPlan
 from state_store import StateStore
 
 
@@ -186,6 +187,180 @@ class TestAgenticPlannerTools(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(planner._finalized)
         self.assertEqual(planner._rationale, "Busy week — kept it simple.")
+
+
+class TestAgenticPlannerLoop(unittest.TestCase):
+    """Test the agent loop using a mocked Anthropic client."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.store = StateStore(self.tmp.name)
+        self.cfg = {
+            "recipe_dir": "recipes_yaml",
+            "lunch_file":  "lunches.yaml",
+            "db_path":     self.tmp.name,
+            "model":       "claude-opus-4-5",
+        }
+        self.constraints = make_constraints()
+
+    def tearDown(self):
+        self.store.close()
+        Path(self.tmp.name).unlink(missing_ok=True)
+
+    def _make_tool_use_response(self, tool_name, tool_id, tool_input):
+        """Helper: build a mock API response with a single tool_use block."""
+        block = MagicMock()
+        block.type = "tool_use"
+        block.name = tool_name
+        block.id = tool_id
+        block.input = tool_input
+
+        response = MagicMock()
+        response.stop_reason = "tool_use"
+        response.content = [block]
+        return response
+
+    def _make_end_turn_response(self):
+        response = MagicMock()
+        response.stop_reason = "end_turn"
+        response.content = []
+        return response
+
+    @patch('agentic_planner.anthropic')
+    @patch('agentic_planner.load_recipes', return_value={})
+    @patch('agentic_planner.load_lunches', return_value=[])
+    def test_finalize_plan_stops_loop(self, mock_lunches, mock_recipes, mock_anthropic):
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+
+        call_count = [0]
+        def side_effect(**kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return self._make_tool_use_response(
+                    "finalize_plan", "call_1",
+                    {"rationale": "Simple week — no complex decisions."}
+                )
+            return self._make_end_turn_response()
+
+        mock_client.messages.create.side_effect = side_effect
+
+        from agentic_planner import AgenticPlanner
+        planner = AgenticPlanner(config=self.cfg, store=self.store)
+        plan = planner.plan_week(self.constraints)
+
+        self.assertEqual(plan.rationale, "Simple week — no complex decisions.")
+        # Only 1 API call needed (first call returns finalize_plan)
+        self.assertEqual(mock_client.messages.create.call_count, 1)
+
+    @patch('agentic_planner.anthropic')
+    @patch('agentic_planner.load_recipes', return_value={})
+    @patch('agentic_planner.load_lunches', return_value=[])
+    def test_fallback_on_api_error(self, mock_lunches, mock_recipes, mock_anthropic):
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+        mock_client.messages.create.side_effect = RuntimeError("API connection refused")
+
+        from agentic_planner import AgenticPlanner
+        planner = AgenticPlanner(config=self.cfg, store=self.store)
+
+        with patch('planner.Planner') as mock_planner_class:
+            mock_fallback = MagicMock()
+            mock_fallback.plan_week.return_value = WeekPlan(
+                week_start_monday=MONDAY,
+                week_key="2026-03-23",
+            )
+            mock_planner_class.return_value = mock_fallback
+
+            plan = planner.plan_week(self.constraints)
+
+        mock_fallback.plan_week.assert_called_once()
+        self.assertTrue(any("fallback" in w.lower() for w in plan.warnings))
+
+    @patch('agentic_planner.anthropic')
+    @patch('agentic_planner.load_recipes', return_value={})
+    @patch('agentic_planner.load_lunches', return_value=[])
+    def test_30_call_limit_triggers_fallback(self, mock_lunches, mock_recipes, mock_anthropic):
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+
+        # Always return a tool_use response (never finalize_plan → hits limit)
+        def side_effect(**kwargs):
+            return self._make_tool_use_response(
+                "get_calendar_constraints", "call_x", {}
+            )
+        mock_client.messages.create.side_effect = side_effect
+
+        from agentic_planner import AgenticPlanner
+        planner = AgenticPlanner(config=self.cfg, store=self.store)
+
+        with patch('planner.Planner') as mock_planner_class:
+            mock_fallback = MagicMock()
+            mock_fallback.plan_week.return_value = WeekPlan(
+                week_start_monday=MONDAY,
+                week_key="2026-03-23",
+            )
+            mock_planner_class.return_value = mock_fallback
+            plan = planner.plan_week(self.constraints)
+
+        mock_fallback.plan_week.assert_called_once()
+
+    @patch('agentic_planner.anthropic')
+    @patch('agentic_planner.load_recipes')
+    @patch('agentic_planner.load_lunches', return_value=[])
+    def test_full_plan_has_seven_days(self, mock_lunches, mock_recipes, mock_anthropic):
+        """Agent assigns all 7 days then finalizes."""
+        RECIPES = {
+            "hamburger-steaks": MEAT_RECIPE,
+            "spiced-rice":      VEGETARIAN_RECIPE,
+        }
+        mock_recipes.return_value = RECIPES
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+
+        # Simulate agent: assign Mon, Tue, Thu as recipes, rest no-cook, finalize
+        call_seq = [0]
+        def make_seq(**kwargs):
+            call_seq[0] += 1
+            n = call_seq[0]
+            if n == 1:
+                return self._make_tool_use_response("assign_meal", f"c{n}",
+                    {"day": "Monday", "recipe_id": "hamburger-steaks"})
+            elif n == 2:
+                return self._make_tool_use_response("assign_no_cook", f"c{n}",
+                    {"day": "Tuesday"})
+            elif n == 3:
+                return self._make_tool_use_response("assign_meal", f"c{n}",
+                    {"day": "Wednesday", "recipe_id": "spiced-rice"})
+            elif n == 4:
+                return self._make_tool_use_response("assign_meal", f"c{n}",
+                    {"day": "Thursday", "recipe_id": "hamburger-steaks"})
+            elif n == 5:
+                return self._make_tool_use_response("assign_no_cook", f"c{n}",
+                    {"day": "Friday"})
+            elif n == 6:
+                return self._make_tool_use_response("assign_no_cook", f"c{n}",
+                    {"day": "Saturday"})
+            elif n == 7:
+                return self._make_tool_use_response("assign_no_cook", f"c{n}",
+                    {"day": "Sunday"})
+            elif n == 8:
+                return self._make_tool_use_response("finalize_plan", f"c{n}",
+                    {"rationale": "Test rationale."})
+            return self._make_end_turn_response()
+
+        mock_client.messages.create.side_effect = make_seq
+
+        from agentic_planner import AgenticPlanner
+        planner = AgenticPlanner(config=self.cfg, store=self.store)
+        plan = planner.plan_week(self.constraints)
+
+        # All 7 days should be present (unassigned filled with leftovers)
+        self.assertEqual(len(plan.dinners), 7)
+        day_names = {s.weekday_name for s in plan.dinners}
+        expected = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
+        self.assertEqual(day_names, expected)
+        self.assertEqual(plan.rationale, "Test rationale.")
 
 
 if __name__ == "__main__":
