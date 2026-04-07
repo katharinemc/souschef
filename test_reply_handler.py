@@ -378,5 +378,69 @@ class TestThursdayGuard(unittest.TestCase):
         self.assertFalse(result)
 
 
+class TestNewIntentParsing(unittest.TestCase):
+    """Test that the intent system prompt handles new v1.5 intent types."""
+
+    @patch('reply_handler.anthropic')
+    def test_rate_experiment_intent_parsed(self, mock_anthropic):
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+        mock_client.messages.create.return_value.content = [
+            MagicMock(text='[{"type": "rate_experiment", "day": "Saturday", "stars": 4}]')
+        ]
+        intents = parse_reply_intents("Rate Saturday's experiment 4 stars", model="test-model")
+        self.assertEqual(intents[0]["type"], "rate_experiment")
+        self.assertEqual(intents[0]["stars"], 4)
+
+    @patch('reply_handler.anthropic')
+    def test_promote_experiment_intent_parsed(self, mock_anthropic):
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+        mock_client.messages.create.return_value.content = [
+            MagicMock(text='[{"type": "promote_experiment", "recipe_id": "merguez"}]')
+        ]
+        intents = parse_reply_intents("Add the merguez to onRotation", model="test-model")
+        self.assertEqual(intents[0]["type"], "promote_experiment")
+
+    @patch('reply_handler.anthropic')
+    def test_assign_note_out_intent_parsed(self, mock_anthropic):
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+        mock_client.messages.create.return_value.content = [
+            MagicMock(text='[{"type": "assign_note_out", "day": "Tuesday", "note_text": "Dinner at Sarah\'s"}]')
+        ]
+        intents = parse_reply_intents("Mark Tuesday as dinner at Sarah's", model="test-model")
+        self.assertEqual(intents[0]["type"], "assign_note_out")
+        self.assertEqual(intents[0]["day"], "Tuesday")
+
+    @patch('reply_handler.anthropic')
+    def test_assign_note_cook_intent_parsed(self, mock_anthropic):
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+        mock_client.messages.create.return_value.content = [
+            MagicMock(text='[{"type": "assign_note_cook", "day": "Sunday", "note_text": "Waffles for dinner"}]')
+        ]
+        intents = parse_reply_intents("Put waffles on Sunday", model="test-model")
+        self.assertEqual(intents[0]["type"], "assign_note_cook")
+
+    def test_read_stdin_reply_done_returns_none(self):
+        from reply_handler import read_stdin_reply
+        with patch('builtins.input', return_value="done"):
+            result = read_stdin_reply()
+        self.assertIsNone(result)
+
+    def test_read_stdin_reply_okay_thanks_returns_none(self):
+        from reply_handler import read_stdin_reply
+        with patch('builtins.input', return_value="okay thanks"):
+            result = read_stdin_reply()
+        self.assertIsNone(result)
+
+    def test_read_stdin_reply_feedback_returns_string(self):
+        from reply_handler import read_stdin_reply
+        with patch('builtins.input', return_value="Swap Tuesday for pasta"):
+            result = read_stdin_reply()
+        self.assertEqual(result, "Swap Tuesday for pasta")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

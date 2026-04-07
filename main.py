@@ -91,6 +91,9 @@ def flatten_config(cfg: dict) -> dict:
     # Section keys override (allow email.to_address etc.)
     for section in ("email", "calendar", "planner", "anthropic", "reply_handler"):
         flat.update(cfg.get(section, {}))
+    # Ensure anthropic model is accessible as flat["model"]
+    if "model" not in flat and "anthropic_model" in flat:
+        flat["model"] = flat["anthropic_model"]
     return flat
 
 
@@ -99,15 +102,21 @@ def flatten_config(cfg: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def cmd_plan(args, cfg: dict, flat: dict):
-    """Generate and send the weekly meal plan."""
+    """Generate and display the weekly meal plan. Enters interactive reply loop."""
     from calendar_reader import CalendarReader
-    from planner import Planner
     from stacker import Stacker
     from grocery_builder import GroceryBuilder
-    from email_sender import EmailSender
     from state_store import StateStore
+    from output_formatter import print_plan
+    from planner import load_recipes
 
     dry_run = args.dry_run
+    use_legacy = getattr(args, "legacy", False)
+
+    # Email stub
+    if getattr(args, "email", False):
+        print("Email delivery not yet enabled in Phase 1.")
+        return
 
     # Determine planning week
     reader = CalendarReader(config=flat, timezone=flat.get("timezone", "America/New_York"))
@@ -119,44 +128,151 @@ def cmd_plan(args, cfg: dict, flat: dict):
     constraints = reader.get_week_constraints(monday)
     log.info(constraints.summary())
 
-    # Run planner
-    log.info("Running planner...")
+    # Run planner (agentic or legacy)
     store = StateStore(flat.get("db_path", "meal_planner.db"))
-    planner = Planner(config=flat, store=store)
+
+    if use_legacy:
+        log.info("Using legacy deterministic planner (--legacy flag set)...")
+        from planner import Planner
+        planner = Planner(config=flat, store=store)
+    else:
+        log.info("Running agentic planner...")
+        from agentic_planner import AgenticPlanner
+        planner = AgenticPlanner(config=flat, store=store)
+
     plan = planner.plan_week(constraints)
-    log.info(
-        "Plan complete: %d cook nights, %d warnings",
-        plan.cook_nights, len(plan.warnings),
-    )
+    log.info("Plan complete: %d cook nights, %d warnings", plan.cook_nights, len(plan.warnings))
 
     # Run stacker
-    log.info("Analysing ingredient stacking opportunities...")
     stacking_notes = Stacker().analyse(plan)
-    log.info("Stacking notes: %d", len(stacking_notes))
 
     # Build grocery list
-    log.info("Building grocery list...")
     grocery = GroceryBuilder(store=store).build(plan)
-    log.info(
-        "Grocery list: %d items, %d likely on hand",
-        len(grocery.all_items), len(grocery.likely_on_hand),
-    )
 
-    # Send email
-    sender = EmailSender(config=flat, dry_run=dry_run)
-    log.info("%s plan email...", "Printing" if dry_run else "Sending")
-    sender.send_plan(plan, grocery, stacking_notes)
+    # Print plan to terminal
+    print_plan(plan, grocery, stacking_notes)
 
-    # Persist plan
-    if not dry_run:
-        store.record_plan(
-            plan.week_key,
-            plan.to_dict(),
-            plan.to_state_meals(),
-        )
-        log.info("Plan saved to database (week key: %s)", plan.week_key)
-    else:
+    if dry_run:
         log.info("Dry run — plan not saved to database.")
+        store.close()
+        return
+
+    # Save plan
+    store.record_plan(plan.week_key, plan.to_dict(), plan.to_state_meals())
+    log.info("Plan saved to database (week key: %s)", plan.week_key)
+
+    # Load recipes for apply_intents
+    recipes = load_recipes(flat.get("recipe_dir", "recipes_yaml"))
+
+    # --- Phase 1 interactive reply loop ---
+    from email_sender import EmailSender
+    from reply_handler import parse_reply_intents, apply_intents
+    from output_formatter import print_plan
+
+    sender = EmailSender(config=flat)
+
+    while True:
+        print("\nRespond to make changes, or type 'done' to approve: ", end="", flush=True)
+        try:
+            user_input = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            log.info("Interrupted — plan not explicitly approved.")
+            break
+
+        if not user_input:
+            continue
+
+        if sender.is_acknowledgment(user_input):
+            store.mark_plan_approved(plan.week_key)
+            print("Plan approved.")
+            break
+
+        # Parse intents
+        intents = parse_reply_intents(user_input, model=flat.get("model", "claude-sonnet-4-20250514"))
+
+        if all(i.get("type") == "acknowledgment" for i in intents):
+            store.mark_plan_approved(plan.week_key)
+            print("Plan approved.")
+            break
+
+        # Apply intents and re-plan
+        modified_plan, change_notes = apply_intents(plan, intents, recipes, store)
+
+        # Handle removed on-hand items
+        removed = getattr(modified_plan, "_removed_on_hand", [])
+
+        # Re-run stacker and grocery builder
+        stacking_notes = Stacker().analyse(modified_plan)
+        grocery = GroceryBuilder(store=store).build(modified_plan)
+
+        if removed:
+            grocery.likely_on_hand = [
+                item for item in grocery.likely_on_hand
+                if not any(r in item.name.lower() for r in removed)
+            ]
+
+        # Print revised plan
+        print_plan(modified_plan, grocery, stacking_notes)
+        if change_notes:
+            print("\nChanges made:")
+            for note in change_notes:
+                print(f"  • {note}")
+
+        # Save revised plan
+        store.record_plan(
+            modified_plan.week_key,
+            modified_plan.to_dict(),
+            modified_plan.to_state_meals(),
+        )
+        plan = modified_plan
+
+    store.close()
+
+
+def cmd_rate(args, cfg: dict, flat: dict):
+    """Record a star rating for an experiment recipe."""
+    import sys
+    from state_store import StateStore
+    from planner import load_recipes
+
+    store = StateStore(flat.get("db_path", "meal_planner.db"))
+    recipes = load_recipes(flat.get("recipe_dir", "recipes_yaml"))
+
+    # Find recipe by name or ID
+    query = args.recipe.strip().lower()
+    recipe = recipes.get(query)
+    if recipe is None:
+        # Try name match
+        for r in recipes.values():
+            if query in r["name"].lower():
+                recipe = r
+                break
+
+    if recipe is None:
+        log.error(
+            "Recipe '%s' not found. Use 'python main.py status' to see available recipes, "
+            "or check recipes_yaml/ for the exact ID or name.",
+            args.recipe,
+        )
+        store.close()
+        sys.exit(1)
+
+    stars = args.stars
+    if not (1 <= stars <= 5):
+        log.error("Stars must be between 1 and 5.")
+        store.close()
+        sys.exit(1)
+
+    promote = getattr(args, "promote", False)
+    store.record_experiment_rating(recipe["id"], stars=stars, promoted=promote)
+
+    if promote:
+        store.promote_experiment(recipe["id"])
+        from reply_handler import _promote_recipe_yaml
+        _promote_recipe_yaml(recipe["id"], store)
+        print(f"Rated '{recipe['name']}' {stars} stars and promoted to onRotation.")
+    else:
+        print(f"Rated '{recipe['name']}' {stars} stars.")
 
     store.close()
 
@@ -325,6 +441,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # plan
     p_plan = sub.add_parser("plan", help="Generate and send the weekly meal plan")
+    p_plan.add_argument(
+        "--legacy", action="store_true",
+        help="Use the deterministic planner instead of the agentic planner"
+    )
+    p_plan.add_argument(
+        "--email", action="store_true",
+        help="[Phase 3] Send plan by email instead of printing to terminal"
+    )
     p_plan.set_defaults(func=cmd_plan)
 
     # reply
@@ -365,6 +489,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the full pipeline and print the email without sending"
     )
     p_preview.set_defaults(func=cmd_preview)
+
+    # rate — new in Phase 1
+    p_rate = sub.add_parser("rate", help="Record a star rating for an experiment recipe")
+    p_rate.add_argument(
+        "--recipe", required=True,
+        help="Recipe name or ID to rate"
+    )
+    p_rate.add_argument(
+        "--stars", type=int, required=True,
+        help="Star rating (1-5)"
+    )
+    p_rate.add_argument(
+        "--promote", action="store_true",
+        help="Also promote the recipe to onRotation"
+    )
+    p_rate.set_defaults(func=cmd_rate)
 
     return parser
 

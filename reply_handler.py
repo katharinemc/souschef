@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
 # Intent parsing via Claude API
 # ---------------------------------------------------------------------------
 
-INTENT_SYSTEM_PROMPT = """You are a meal plan assistant. The user has replied to their weekly meal plan email with feedback or swap requests.
+INTENT_SYSTEM_PROMPT = """You are a meal plan assistant. The user has replied to their weekly meal plan with feedback.
 
 Extract all actions from their reply as a JSON array. Each action has a "type" and relevant fields.
 
@@ -74,7 +74,6 @@ Supported action types:
 
 1. swap_day — user wants to change a specific day's meal
    {"type": "swap_day", "day": "Tuesday", "constraint": "pasta"}
-   constraint can be: a tag name ("pasta", "easy", "vegetarian"), a recipe name, or null (pick best available)
 
 2. remove_on_hand — user says an ingredient is not actually on hand
    {"type": "remove_on_hand", "ingredient": "cream cheese"}
@@ -88,8 +87,25 @@ Supported action types:
 5. skip_experiment — user wants to skip the experiment recipe this week
    {"type": "skip_experiment"}
 
-6. acknowledgment — user is done ("okay thanks", "looks good", "done", etc.)
-   {"type": "acknowledgment"}
+6. assign_note_out — user is eating out / food provided (not a cook night, no grocery items)
+   {"type": "assign_note_out", "day": "Tuesday", "note_text": "Dinner at Sarah's"}
+
+7. assign_note_cook — user is cooking something not in the library (counts as cook night)
+   {"type": "assign_note_cook", "day": "Sunday", "note_text": "Waffles for dinner"}
+
+8. rate_experiment — user is rating the Saturday experiment
+   {"type": "rate_experiment", "day": "Saturday", "stars": 4, "recipe_id": null}
+   stars is an integer 1-5. recipe_id is optional (use null if not known).
+
+9. promote_experiment — user wants to add the experiment to onRotation
+   {"type": "promote_experiment", "recipe_id": null}
+   recipe_id is optional; if null, apply to the most recent Saturday experiment.
+
+10. import_atk — user wants to import an ATK recipe
+    {"type": "import_atk", "selection": "miso salmon"}
+
+11. acknowledgment — user is done ("okay thanks", "looks good", "done", etc.)
+    {"type": "acknowledgment"}
 
 Rules:
 - Return ONLY valid JSON. No preamble, no markdown, no explanation.
@@ -101,15 +117,54 @@ Examples:
 User: "Swap Tuesday for a pasta dish"
 Output: [{"type": "swap_day", "day": "Tuesday", "constraint": "pasta"}]
 
-User: "Switch Wednesday to something easy, and the cream cheese is already gone"
-Output: [{"type": "swap_day", "day": "Wednesday", "constraint": "easy"}, {"type": "remove_on_hand", "ingredient": "cream cheese"}]
+User: "Mark Tuesday as dinner at Sarah's"
+Output: [{"type": "assign_note_out", "day": "Tuesday", "note_text": "Dinner at Sarah's"}]
+
+User: "Rate Saturday 4 stars"
+Output: [{"type": "rate_experiment", "day": "Saturday", "stars": 4, "recipe_id": null}]
+
+User: "Rate the merguez 5 stars, add to onRotation"
+Output: [{"type": "rate_experiment", "day": "Saturday", "stars": 5, "recipe_id": null}, {"type": "promote_experiment", "recipe_id": null}]
+
+User: "Put waffles on Sunday"
+Output: [{"type": "assign_note_cook", "day": "Sunday", "note_text": "Waffles for dinner"}]
 
 User: "Okay looks good, thanks"
 Output: [{"type": "acknowledgment"}]
-
-User: "Skip the experiment this week"
-Output: [{"type": "skip_experiment"}]
 """
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: stdin reply reader
+# ---------------------------------------------------------------------------
+
+ACK_PATTERNS = [
+    "okay thanks", "ok thanks", "looks good", "perfect",
+    "great thanks", "all good", "sounds good", "done",
+    "got it", "thanks", "thank you", "good", "approved",
+]
+
+
+def read_stdin_reply() -> Optional[str]:
+    """
+    Read a reply from stdin.
+
+    Returns None if the user types a terminal acknowledgment ('done', 'okay thanks', etc.).
+    Returns the reply text string otherwise.
+    """
+    try:
+        text = input().strip()
+    except EOFError:
+        return None
+
+    if not text:
+        return ""
+
+    lower = text.lower()
+    if any(p in lower for p in ACK_PATTERNS):
+        return None
+
+    return text
 
 
 def parse_reply_intents(reply_body: str, model: str, api_key: Optional[str] = None) -> list[dict]:
@@ -320,7 +375,104 @@ def apply_intents(
                         )
                     break
 
+        elif kind == "assign_note_out":
+            day_name  = intent.get("day", "").strip().title()
+            note_text = intent.get("note_text", day_name)
+            target = next((s for s in plan.dinners if s.weekday_name == day_name), None)
+            if target:
+                from planner import MealSlot
+                idx = plan.dinners.index(target)
+                plan.dinners[idx] = MealSlot(
+                    date=target.date, slot="dinner",
+                    recipe_id=None, label=note_text,
+                    tags=[], ingredients=[],
+                    is_no_cook=True,
+                    note_type="out",
+                    note_text=note_text,
+                )
+                already_assigned.discard(target.recipe_id)
+                notes.append(f"{day_name} marked as '{note_text}' [out].")
+
+        elif kind == "assign_note_cook":
+            day_name  = intent.get("day", "").strip().title()
+            note_text = intent.get("note_text", day_name)
+            target = next((s for s in plan.dinners if s.weekday_name == day_name), None)
+            if target:
+                from planner import MealSlot
+                idx = plan.dinners.index(target)
+                plan.dinners[idx] = MealSlot(
+                    date=target.date, slot="dinner",
+                    recipe_id=None, label=note_text,
+                    tags=[], ingredients=[],
+                    is_no_cook=False,
+                    note_type="cook",
+                    note_text=note_text,
+                )
+                already_assigned.discard(target.recipe_id)
+                notes.append(f"{day_name} marked as '{note_text}' [cook].")
+
+        elif kind == "rate_experiment":
+            stars     = int(intent.get("stars", 0))
+            recipe_id = intent.get("recipe_id")
+            if not recipe_id:
+                # Find Saturday's recipe in the plan
+                sat = next(
+                    (s for s in plan.dinners if s.date.weekday() == 5 and s.recipe_id),
+                    None,
+                )
+                recipe_id = sat.recipe_id if sat else None
+            if recipe_id and store and 1 <= stars <= 5:
+                store.record_experiment_rating(recipe_id, stars=stars)
+                notes.append(f"Rated {recipe_id} {stars} stars.")
+            elif not (1 <= stars <= 5):
+                notes.append("Rating must be 1-5 stars.")
+            else:
+                notes.append("Could not find experiment recipe to rate.")
+
+        elif kind == "promote_experiment":
+            recipe_id = intent.get("recipe_id")
+            if not recipe_id:
+                sat = next(
+                    (s for s in plan.dinners if s.date.weekday() == 5 and s.recipe_id),
+                    None,
+                )
+                recipe_id = sat.recipe_id if sat else None
+            if recipe_id and store:
+                store.promote_experiment(recipe_id)
+                # Update the recipe YAML to add onRotation tag
+                _promote_recipe_yaml(recipe_id, store)
+                notes.append(f"Promoted {recipe_id} to onRotation.")
+            else:
+                notes.append("Could not find experiment recipe to promote.")
+
+        elif kind == "import_atk":
+            log.info("ATK import requested for '%s' — not implemented in Phase 1", intent.get("selection"))
+            notes.append("ATK import not yet implemented in Phase 1.")
+
     return plan, notes
+
+
+def _promote_recipe_yaml(recipe_id: str, store=None) -> None:
+    """Add 'onRotation' tag to the recipe's YAML file."""
+    import yaml
+    from pathlib import Path
+
+    recipe_dir = Path("recipes_yaml")
+    yaml_path  = recipe_dir / f"{recipe_id}.yaml"
+    if not yaml_path.exists():
+        log.warning("Cannot promote %s — YAML file not found at %s", recipe_id, yaml_path)
+        return
+
+    with open(yaml_path, encoding="utf-8") as f:
+        recipe = yaml.safe_load(f)
+
+    tags = recipe.get("tags") or []
+    if "onRotation" not in tags:
+        tags.append("onRotation")
+        recipe["tags"] = tags
+        with open(yaml_path, "w", encoding="utf-8") as f:
+            yaml.dump(recipe, f, allow_unicode=True, default_flow_style=False)
+        log.info("Added onRotation tag to %s", yaml_path)
 
 
 def _dummy_dc(d: date):
@@ -527,6 +679,7 @@ class ReplyHandler:
             week_key=plan_dict["week_key"],
             cook_nights=plan_dict.get("cook_nights", 0),
             warnings=list(plan_dict.get("warnings", [])),
+            rationale=plan_dict.get("rationale", ""),
         )
 
         for d in plan_dict.get("dinners", []):
@@ -541,6 +694,8 @@ class ReplyHandler:
                 is_no_cook=d.get("is_no_cook", False),
                 is_meatless=d.get("is_meatless", False),
                 is_fasting=d.get("is_fasting", False),
+                note_type=d.get("note_type"),
+                note_text=d.get("note_text"),
             )
             plan.dinners.append(slot)
 
@@ -554,6 +709,8 @@ class ReplyHandler:
                 tags=[],
                 ingredients=list(lunch_dict.get("ingredients") or []),
                 notes=list(lunch_dict.get("notes") or []),
+                note_type=lunch_dict.get("note_type"),
+                note_text=lunch_dict.get("note_text"),
             )
 
         return plan

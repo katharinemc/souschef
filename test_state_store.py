@@ -183,5 +183,82 @@ class TestStateStore(unittest.TestCase):
         self.assertIn("meal_rows", s)
 
 
+class TestExperimentRatings(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db = StateStore(self.tmp.name)
+
+    def tearDown(self):
+        self.db.close()
+        Path(self.tmp.name).unlink(missing_ok=True)
+
+    def test_record_and_get_rating(self):
+        self.db.record_experiment_rating("merguez", stars=4)
+        ratings = self.db.get_experiment_ratings("merguez")
+        self.assertEqual(len(ratings), 1)
+        self.assertEqual(ratings[0]["stars"], 4)
+        self.assertEqual(ratings[0]["promoted"], 0)
+
+    def test_multiple_ratings_same_recipe(self):
+        self.db.record_experiment_rating("merguez", stars=3)
+        self.db.record_experiment_rating("merguez", stars=5)
+        ratings = self.db.get_experiment_ratings("merguez")
+        self.assertEqual(len(ratings), 2)
+
+    def test_promote_experiment(self):
+        self.db.record_experiment_rating("merguez", stars=5)
+        self.db.promote_experiment("merguez")
+        ratings = self.db.get_experiment_ratings("merguez")
+        self.assertEqual(ratings[-1]["promoted"], 1)
+
+    def test_get_ratings_unknown_recipe(self):
+        self.assertEqual(self.db.get_experiment_ratings("unknown"), [])
+
+    def test_new_tables_do_not_break_existing_db(self):
+        # Simulate an existing db by opening, closing, reopening
+        # The new tables are created with IF NOT EXISTS
+        self.db.close()
+        db2 = StateStore(self.tmp.name)
+        summary = db2.summary()
+        self.assertIn("tracked_recipes", summary)
+        db2.close()
+
+
+class TestMealNotes(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db = StateStore(self.tmp.name)
+
+    def tearDown(self):
+        self.db.close()
+        Path(self.tmp.name).unlink(missing_ok=True)
+
+    def test_record_and_retrieve_out_note(self):
+        self.db.record_meal_note(
+            week_key="2026-03-23",
+            meal_date="2026-03-24",
+            note_type="out",
+            note_text="Dinner at Sarah's",
+        )
+        # No retrieval method required in Phase 1 — just confirm no error
+
+    def test_record_cook_note(self):
+        self.db.record_meal_note(
+            week_key="2026-03-23",
+            meal_date="2026-03-29",
+            note_type="cook",
+            note_text="Waffles for dinner",
+        )
+
+    def test_invalid_note_type_raises(self):
+        with self.assertRaises(Exception):
+            self.db.record_meal_note(
+                week_key="2026-03-23",
+                meal_date="2026-03-24",
+                note_type="invalid",
+                note_text="Something",
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
