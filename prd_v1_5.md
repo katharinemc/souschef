@@ -238,9 +238,16 @@ Phase 1 shipped a standard agentic tool-use loop: Claude called `get_calendar_co
 
 Collapse to a **single Claude API call** with pre-assembled context. All deterministic data-gathering (calendar, recipes, rotation history, recent meals) runs in Python before the API call. Claude receives the full context in one prompt and returns a structured plan via a single `submit_plan` tool call.
 
+#### Measured results (first dogfood run, 2026-04-07)
+
+- **Tokens:** 2,491 input / 488 output (2,979 total)
+- **Cost:** ~$0.074 per run ($0.037 input + $0.037 output at Opus pricing)
+- **vs. multi-turn loop:** ~57k input / ~1.3k output / ~$1.00 per run
+- **Savings:** ~13× cheaper per run
+
 #### Consequences
 
-- Cost: ~5–6k tokens per run (~$0.08–0.10) — roughly 10× cheaper
+- Cost: ~$0.07–0.10 per run — roughly 13× cheaper than the tool loop
 - Latency: one network round-trip instead of 12+
 - Tradeoff: Claude cannot ask follow-up questions mid-plan or react to tool errors. Constraint validation moves entirely to post-processing in Python (same rules, different location).
 - The `assign_meal` / `assign_no_cook` / `assign_note` tools are removed; `submit_plan` is the only tool.
