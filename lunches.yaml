@@ -1,0 +1,18 @@
+# lunches.yaml
+#
+# Weekly lunch rotation. One entry is picked per week (most overdue first).
+#
+# Fields:
+#   id          Unique identifier (slug format, no spaces)
+#   label       Display name shown in the meal plan output
+#   prep_notes  Optional — printed as "Weekend prep: ..." in the plan
+#   tags        Optional list of tags (not currently used for filtering)
+
+- id: nashville-hot-salad
+  label: Nashville hot salad
+  prep_notes: Purchase bagged Nashville hot salad
+
+- id: greek-quinoa-bowl
+  label: Greek salad quinoa bowl
+  prep_notes: Make quinoa Sunday; ensure cucumbers, tomatoes, red onions, feta, Greek salad dressing, bell peppers and olives in fridge
+
