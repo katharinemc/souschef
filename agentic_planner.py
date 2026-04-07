@@ -65,7 +65,7 @@ SUBMIT_PLAN_TOOL = {
             },
             "dinners": {
                 "type": "array",
-                "description": "Exactly 7 dinner assignments, one per day Fri-Thu.",
+                "description": "Exactly 7 dinner assignments, one per day. Use the exact ISO dates from the CALENDAR CONSTRAINTS — Mon through Sun.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -126,12 +126,12 @@ def _build_context_message(
 ) -> str:
     """Assemble all planning context into a single user message string."""
     monday = constraints.week_start_monday
-    friday = monday + timedelta(days=4)
-    thursday = monday + timedelta(days=10)
+    sunday  = monday + timedelta(days=6)
 
     lines = [
-        f"Plan the week of {friday.strftime('%b %-d')} – {thursday.strftime('%b %-d, %Y')}.",
+        f"Plan the 7-day window: {monday.strftime('%b %-d')} (Mon) – {sunday.strftime('%b %-d, %Y')} (Sun).",
         f"Today is {today.strftime('%A, %B %-d, %Y')}.",
+        "Use the exact ISO dates shown in CALENDAR CONSTRAINTS below — do not invent or shift dates.",
         "",
     ]
 
@@ -230,7 +230,8 @@ Study it, then call submit_plan() exactly once with all 7 dinners assigned.
 
 ## OUTPUT EXPECTATIONS
 
-- Assign every day Fri–Thu (recipe, no_cook, or note — every day gets a slot).
+- Assign every day in the planning window (Mon–Sun, 7 days total).
+- Use the exact ISO dates from CALENDAR CONSTRAINTS — do not shift or invent dates.
 - Use type=note with note_type=out for eating out.
 - Use type=note with note_type=cook for cooking something not in the library.
 - Call submit_plan() with a rationale of 3–5 sentences covering the 2–3 most
