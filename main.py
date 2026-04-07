@@ -195,8 +195,16 @@ def cmd_plan(args, cfg: dict, flat: dict):
             print("Plan approved.")
             break
 
-        # Apply intents and re-plan
+        # Apply intents
         modified_plan, change_notes = apply_intents(plan, intents, recipes, store)
+
+        # Side-effect-only intents (rating, promotion, ATK stub) don't change
+        # the plan — just confirm and stay in the loop without reprinting.
+        _SIDE_EFFECT_TYPES = {"rate_experiment", "promote_experiment", "import_atk"}
+        if all(i.get("type") in _SIDE_EFFECT_TYPES for i in intents):
+            for note in change_notes:
+                print(f"  • {note}")
+            continue
 
         # Handle removed on-hand items
         removed = getattr(modified_plan, "_removed_on_hand", [])
