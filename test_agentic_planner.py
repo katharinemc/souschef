@@ -1,6 +1,8 @@
 """
 test_agentic_planner.py
 
+Tests for AgenticPlanner — single-call architecture (ADR-001).
+
 Run with: python -m pytest test_agentic_planner.py -v
 """
 
@@ -73,8 +75,41 @@ PIZZA_RECIPE = {
 }
 
 
-class TestAgenticPlannerTools(unittest.TestCase):
-    """Test each tool function in isolation without running the agent loop."""
+# ---------------------------------------------------------------------------
+# Helper: build a minimal submit_plan input for a full week
+# ---------------------------------------------------------------------------
+
+def _full_plan_input(constraints: WeekConstraints, recipes: dict) -> dict:
+    """Build a valid submit_plan input assigning every day."""
+    monday = constraints.week_start_monday
+    # Find a vegetarian and a meat recipe for valid assignment
+    veg_id = next((r["id"] for r in recipes.values() if "vegetarian" in (r.get("tags") or [])), None)
+    meat_id = next((r["id"] for r in recipes.values() if "vegetarian" not in (r.get("tags") or [])), None)
+
+    dinners = []
+    for i in range(7):
+        d = monday + timedelta(days=i)
+        weekday = d.weekday()
+        dc = next(dc for dc in constraints.days if dc.date == d)
+
+        if dc.is_no_cook:
+            dinners.append({"date": d.isoformat(), "type": "no_cook"})
+        elif weekday in (2, 4) and veg_id:  # Wed/Fri: meatless
+            dinners.append({"date": d.isoformat(), "type": "recipe", "recipe_id": veg_id})
+        elif meat_id:
+            dinners.append({"date": d.isoformat(), "type": "recipe", "recipe_id": meat_id})
+        else:
+            dinners.append({"date": d.isoformat(), "type": "no_cook"})
+
+    return {"rationale": "Test rationale.", "dinners": dinners}
+
+
+# ---------------------------------------------------------------------------
+# Tests: _parse_dinner_slot (constraint validation)
+# ---------------------------------------------------------------------------
+
+class TestParseDinnerSlot(unittest.TestCase):
+    """Test constraint enforcement in _parse_dinner_slot."""
 
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -90,107 +125,95 @@ class TestAgenticPlannerTools(unittest.TestCase):
         self.store.close()
         Path(self.tmp.name).unlink(missing_ok=True)
 
-    def _make_planner_with_recipes(self, recipes):
+    def _make_planner(self, recipes):
         from agentic_planner import AgenticPlanner
         planner = AgenticPlanner(config=self.cfg, store=self.store)
-        planner._constraints = self.constraints
-        planner._assigned = {}
-        planner._lunch = None
-        planner._rationale = ""
-        planner._finalized = False
         planner.recipes = {r["id"]: r for r in recipes}
         planner.lunches = []
         return planner
 
-    # --- assign_meal constraint validation ---
+    def _dc_for_weekday(self, weekday: int) -> DayConstraints:
+        """Return the DayConstraints for the given weekday (0=Mon)."""
+        monday = self.constraints.week_start_monday
+        d = monday + timedelta(days=weekday)
+        return next(dc for dc in self.constraints.days if dc.date == d)
 
-    def test_assign_meat_to_wednesday_returns_error(self):
-        planner = self._make_planner_with_recipes([MEAT_RECIPE])
-        result = planner._tool_assign_meal("Wednesday", "hamburger-steaks")
-        self.assertFalse(result["ok"])
-        self.assertIn("meatless", result["error"].lower())
+    # --- meatless constraint ---
 
-    def test_assign_meat_to_friday_returns_error(self):
-        planner = self._make_planner_with_recipes([MEAT_RECIPE])
-        result = planner._tool_assign_meal("Friday", "hamburger-steaks")
-        self.assertFalse(result["ok"])
-        self.assertIn("meatless", result["error"].lower())
+    def test_meat_on_wednesday_overrides_to_no_cook(self):
+        planner = self._make_planner([MEAT_RECIPE])
+        dc = self._dc_for_weekday(2)  # Wednesday
+        slot = planner._parse_dinner_slot(dc, "recipe", {"recipe_id": "hamburger-steaks"})
+        self.assertTrue(slot.is_no_cook)
 
-    def test_assign_vegetarian_to_wednesday_succeeds(self):
-        planner = self._make_planner_with_recipes([VEGETARIAN_RECIPE])
-        result = planner._tool_assign_meal("Wednesday", "spiced-rice")
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["day"], "Wednesday")
+    def test_meat_on_friday_overrides_to_no_cook(self):
+        planner = self._make_planner([MEAT_RECIPE])
+        dc = self._dc_for_weekday(4)  # Friday
+        slot = planner._parse_dinner_slot(dc, "recipe", {"recipe_id": "hamburger-steaks"})
+        self.assertTrue(slot.is_no_cook)
 
-    def test_assign_experiment_to_non_saturday_returns_error(self):
-        planner = self._make_planner_with_recipes([EXPERIMENT_RECIPE])
-        result = planner._tool_assign_meal("Monday", "merguez")
-        self.assertFalse(result["ok"])
-        self.assertIn("experiment", result["error"].lower())
+    def test_vegetarian_on_wednesday_succeeds(self):
+        planner = self._make_planner([VEGETARIAN_RECIPE])
+        dc = self._dc_for_weekday(2)  # Wednesday
+        slot = planner._parse_dinner_slot(dc, "recipe", {"recipe_id": "spiced-rice"})
+        self.assertFalse(slot.is_no_cook)
+        self.assertEqual(slot.recipe_id, "spiced-rice")
 
-    def test_assign_experiment_to_saturday_succeeds(self):
-        planner = self._make_planner_with_recipes([EXPERIMENT_RECIPE])
-        result = planner._tool_assign_meal("Saturday", "merguez")
-        self.assertTrue(result["ok"])
+    def test_meat_on_fasting_day_overrides_to_no_cook(self):
+        planner = self._make_planner([MEAT_RECIPE])
+        dc = self._dc_for_weekday(0)  # Monday
+        dc.is_fasting = True
+        slot = planner._parse_dinner_slot(dc, "recipe", {"recipe_id": "hamburger-steaks"})
+        self.assertTrue(slot.is_no_cook)
 
-    def test_assign_pizza_to_non_friday_returns_error(self):
-        planner = self._make_planner_with_recipes([PIZZA_RECIPE])
-        result = planner._tool_assign_meal("Monday", "homemade-pizza")
-        self.assertFalse(result["ok"])
-        self.assertIn("friday", result["error"].lower())
+    # --- unknown recipe ---
 
-    def test_assign_same_day_twice_returns_error(self):
-        planner = self._make_planner_with_recipes([MEAT_RECIPE, VEGETARIAN_RECIPE])
-        planner._tool_assign_meal("Monday", "hamburger-steaks")
-        result = planner._tool_assign_meal("Monday", "spiced-rice")
-        self.assertFalse(result["ok"])
-        self.assertIn("already assigned", result["error"].lower())
+    def test_unknown_recipe_id_falls_back_to_no_cook(self):
+        planner = self._make_planner([])
+        dc = self._dc_for_weekday(0)  # Monday
+        slot = planner._parse_dinner_slot(dc, "recipe", {"recipe_id": "no-such-recipe"})
+        self.assertTrue(slot.is_no_cook)
 
-    def test_assign_unknown_recipe_returns_error(self):
-        planner = self._make_planner_with_recipes([])
-        result = planner._tool_assign_meal("Monday", "no-such-recipe")
-        self.assertFalse(result["ok"])
+    # --- note slots ---
 
-    # --- assign_no_cook ---
-
-    def test_assign_no_cook_succeeds(self):
-        planner = self._make_planner_with_recipes([])
-        result = planner._tool_assign_no_cook("Tuesday", "KRM event after 3pm")
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["label"], "no cook")
-        self.assertIn("Tuesday", planner._assigned)
-
-    # --- assign_note ---
-
-    def test_assign_note_out(self):
-        planner = self._make_planner_with_recipes([])
-        result = planner._tool_assign_note("Tuesday", "Dinner at Sarah's", "out")
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["note_type"], "out")
-        slot = planner._assigned["Tuesday"]
+    def test_note_out(self):
+        planner = self._make_planner([])
+        dc = self._dc_for_weekday(1)  # Tuesday
+        slot = planner._parse_dinner_slot(dc, "note", {
+            "note_text": "Dinner at Sarah's", "note_type": "out"
+        })
         self.assertEqual(slot.note_type, "out")
         self.assertEqual(slot.label, "Dinner at Sarah's")
 
-    def test_assign_note_cook(self):
-        planner = self._make_planner_with_recipes([])
-        result = planner._tool_assign_note("Sunday", "Waffles for dinner", "cook")
-        self.assertTrue(result["ok"])
-        slot = planner._assigned["Sunday"]
+    def test_note_cook(self):
+        planner = self._make_planner([])
+        dc = self._dc_for_weekday(6)  # Sunday
+        slot = planner._parse_dinner_slot(dc, "note", {
+            "note_text": "Waffles for dinner", "note_type": "cook"
+        })
         self.assertEqual(slot.note_type, "cook")
 
-    # --- finalize_plan ---
+    # --- no_cook slots ---
 
-    def test_finalize_plan_sets_flag_and_rationale(self):
-        planner = self._make_planner_with_recipes([])
-        self.assertFalse(planner._finalized)
-        result = planner._tool_finalize_plan("Busy week — kept it simple.")
-        self.assertTrue(result["ok"])
-        self.assertTrue(planner._finalized)
-        self.assertEqual(planner._rationale, "Busy week — kept it simple.")
+    def test_no_cook_includes_qualifying_event_in_notes(self):
+        planner = self._make_planner([])
+        dc = self._dc_for_weekday(1)  # Tuesday
+        dc.qualifying_events = ["KRM Soccer 6:30pm"]
+        slot = planner._parse_dinner_slot(dc, "no_cook", {})
+        self.assertIn("KRM Soccer 6:30pm", slot.notes)
 
+    def test_no_cook_on_meatless_day_notes_would_have_been_meatless(self):
+        planner = self._make_planner([])
+        dc = self._dc_for_weekday(2)  # Wednesday
+        slot = planner._parse_dinner_slot(dc, "no_cook", {})
+        self.assertIn("Would have been meatless", slot.notes)
+
+
+# ---------------------------------------------------------------------------
+# Tests: plan_week (full loop with mocked Anthropic client)
+# ---------------------------------------------------------------------------
 
 class TestAgenticPlannerLoop(unittest.TestCase):
-    """Test the agent loop using a mocked Anthropic client."""
 
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -207,51 +230,66 @@ class TestAgenticPlannerLoop(unittest.TestCase):
         self.store.close()
         Path(self.tmp.name).unlink(missing_ok=True)
 
-    def _make_tool_use_response(self, tool_name, tool_id, tool_input):
-        """Helper: build a mock API response with a single tool_use block."""
+    def _make_submit_plan_response(self, plan_input: dict):
         block = MagicMock()
         block.type = "tool_use"
-        block.name = tool_name
-        block.id = tool_id
-        block.input = tool_input
+        block.name = "submit_plan"
+        block.input = plan_input
+
+        usage = MagicMock()
+        usage.input_tokens = 1234
+        usage.output_tokens = 567
 
         response = MagicMock()
         response.stop_reason = "tool_use"
         response.content = [block]
+        response.usage = usage
         return response
 
-    def _make_end_turn_response(self):
-        response = MagicMock()
-        response.stop_reason = "end_turn"
-        response.content = []
-        return response
+    def _make_recipes(self):
+        return {
+            "hamburger-steaks": MEAT_RECIPE,
+            "spiced-rice":      VEGETARIAN_RECIPE,
+        }
 
     @patch('agentic_planner.anthropic')
-    @patch('agentic_planner.load_recipes', return_value={})
+    @patch('agentic_planner.load_recipes')
     @patch('agentic_planner.load_lunches', return_value=[])
-    def test_finalize_plan_stops_loop(self, mock_lunches, mock_recipes, mock_anthropic):
+    def test_single_api_call(self, mock_lunches, mock_recipes, mock_anthropic):
+        """Exactly one API call is made."""
+        RECIPES = self._make_recipes()
+        mock_recipes.return_value = RECIPES
         mock_client = MagicMock()
         mock_anthropic.Anthropic.return_value = mock_client
 
-        call_count = [0]
-        def side_effect(**kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return self._make_tool_use_response(
-                    "finalize_plan", "call_1",
-                    {"rationale": "Simple week — no complex decisions."}
-                )
-            return self._make_end_turn_response()
+        plan_input = _full_plan_input(self.constraints, RECIPES)
+        mock_client.messages.create.return_value = self._make_submit_plan_response(plan_input)
 
-        mock_client.messages.create.side_effect = side_effect
+        from agentic_planner import AgenticPlanner
+        planner = AgenticPlanner(config=self.cfg, store=self.store)
+        planner.plan_week(self.constraints)
+
+        self.assertEqual(mock_client.messages.create.call_count, 1)
+
+    @patch('agentic_planner.anthropic')
+    @patch('agentic_planner.load_recipes')
+    @patch('agentic_planner.load_lunches', return_value=[])
+    def test_full_plan_has_seven_days(self, mock_lunches, mock_recipes, mock_anthropic):
+        RECIPES = self._make_recipes()
+        mock_recipes.return_value = RECIPES
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+
+        plan_input = _full_plan_input(self.constraints, RECIPES)
+        plan_input["rationale"] = "Test rationale."
+        mock_client.messages.create.return_value = self._make_submit_plan_response(plan_input)
 
         from agentic_planner import AgenticPlanner
         planner = AgenticPlanner(config=self.cfg, store=self.store)
         plan = planner.plan_week(self.constraints)
 
-        self.assertEqual(plan.rationale, "Simple week — no complex decisions.")
-        # Only 1 API call needed (first call returns finalize_plan)
-        self.assertEqual(mock_client.messages.create.call_count, 1)
+        self.assertEqual(len(plan.dinners), 7)
+        self.assertEqual(plan.rationale, "Test rationale.")
 
     @patch('agentic_planner.anthropic')
     @patch('agentic_planner.load_recipes', return_value={})
@@ -271,7 +309,6 @@ class TestAgenticPlannerLoop(unittest.TestCase):
                 week_key="2026-03-23",
             )
             mock_planner_class.return_value = mock_fallback
-
             plan = planner.plan_week(self.constraints)
 
         mock_fallback.plan_week.assert_called_once()
@@ -280,16 +317,18 @@ class TestAgenticPlannerLoop(unittest.TestCase):
     @patch('agentic_planner.anthropic')
     @patch('agentic_planner.load_recipes', return_value={})
     @patch('agentic_planner.load_lunches', return_value=[])
-    def test_30_call_limit_triggers_fallback(self, mock_lunches, mock_recipes, mock_anthropic):
+    def test_fallback_when_no_tool_call_in_response(self, mock_lunches, mock_recipes, mock_anthropic):
         mock_client = MagicMock()
         mock_anthropic.Anthropic.return_value = mock_client
 
-        # Always return a tool_use response (never finalize_plan → hits limit)
-        def side_effect(**kwargs):
-            return self._make_tool_use_response(
-                "get_calendar_constraints", "call_x", {}
-            )
-        mock_client.messages.create.side_effect = side_effect
+        usage = MagicMock()
+        usage.input_tokens = 100
+        usage.output_tokens = 10
+        bad_response = MagicMock()
+        bad_response.stop_reason = "end_turn"
+        bad_response.content = []
+        bad_response.usage = usage
+        mock_client.messages.create.return_value = bad_response
 
         from agentic_planner import AgenticPlanner
         planner = AgenticPlanner(config=self.cfg, store=self.store)
@@ -308,59 +347,49 @@ class TestAgenticPlannerLoop(unittest.TestCase):
     @patch('agentic_planner.anthropic')
     @patch('agentic_planner.load_recipes')
     @patch('agentic_planner.load_lunches', return_value=[])
-    def test_full_plan_has_seven_days(self, mock_lunches, mock_recipes, mock_anthropic):
-        """Agent assigns all 7 days then finalizes."""
-        RECIPES = {
-            "hamburger-steaks": MEAT_RECIPE,
-            "spiced-rice":      VEGETARIAN_RECIPE,
-        }
+    def test_missing_days_filled_with_leftovers(self, mock_lunches, mock_recipes, mock_anthropic):
+        """Days omitted from Claude's response are filled with leftovers."""
+        RECIPES = self._make_recipes()
         mock_recipes.return_value = RECIPES
         mock_client = MagicMock()
         mock_anthropic.Anthropic.return_value = mock_client
 
-        # Simulate agent: assign Mon, Tue, Thu as recipes, rest no-cook, finalize
-        call_seq = [0]
-        def make_seq(**kwargs):
-            call_seq[0] += 1
-            n = call_seq[0]
-            if n == 1:
-                return self._make_tool_use_response("assign_meal", f"c{n}",
-                    {"day": "Monday", "recipe_id": "hamburger-steaks"})
-            elif n == 2:
-                return self._make_tool_use_response("assign_no_cook", f"c{n}",
-                    {"day": "Tuesday"})
-            elif n == 3:
-                return self._make_tool_use_response("assign_meal", f"c{n}",
-                    {"day": "Wednesday", "recipe_id": "spiced-rice"})
-            elif n == 4:
-                return self._make_tool_use_response("assign_meal", f"c{n}",
-                    {"day": "Thursday", "recipe_id": "hamburger-steaks"})
-            elif n == 5:
-                return self._make_tool_use_response("assign_no_cook", f"c{n}",
-                    {"day": "Friday"})
-            elif n == 6:
-                return self._make_tool_use_response("assign_no_cook", f"c{n}",
-                    {"day": "Saturday"})
-            elif n == 7:
-                return self._make_tool_use_response("assign_no_cook", f"c{n}",
-                    {"day": "Sunday"})
-            elif n == 8:
-                return self._make_tool_use_response("finalize_plan", f"c{n}",
-                    {"rationale": "Test rationale."})
-            return self._make_end_turn_response()
-
-        mock_client.messages.create.side_effect = make_seq
+        monday = self.constraints.week_start_monday
+        # Only assign Monday — all other days missing
+        partial_plan = {
+            "rationale": "Partial.",
+            "dinners": [
+                {"date": monday.isoformat(), "type": "recipe", "recipe_id": "hamburger-steaks"},
+            ],
+        }
+        mock_client.messages.create.return_value = self._make_submit_plan_response(partial_plan)
 
         from agentic_planner import AgenticPlanner
         planner = AgenticPlanner(config=self.cfg, store=self.store)
         plan = planner.plan_week(self.constraints)
 
-        # All 7 days should be present (unassigned filled with leftovers)
         self.assertEqual(len(plan.dinners), 7)
-        day_names = {s.weekday_name for s in plan.dinners}
-        expected = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
-        self.assertEqual(day_names, expected)
-        self.assertEqual(plan.rationale, "Test rationale.")
+        leftovers = [s for s in plan.dinners if s.label == "leftovers"]
+        self.assertEqual(len(leftovers), 6)
+
+    @patch('agentic_planner.anthropic')
+    @patch('agentic_planner.load_recipes')
+    @patch('agentic_planner.load_lunches', return_value=[])
+    def test_rationale_preserved(self, mock_lunches, mock_recipes, mock_anthropic):
+        RECIPES = self._make_recipes()
+        mock_recipes.return_value = RECIPES
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+
+        plan_input = _full_plan_input(self.constraints, RECIPES)
+        plan_input["rationale"] = "Busy week with lots of KRM events."
+        mock_client.messages.create.return_value = self._make_submit_plan_response(plan_input)
+
+        from agentic_planner import AgenticPlanner
+        planner = AgenticPlanner(config=self.cfg, store=self.store)
+        plan = planner.plan_week(self.constraints)
+
+        self.assertEqual(plan.rationale, "Busy week with lots of KRM events.")
 
 
 if __name__ == "__main__":

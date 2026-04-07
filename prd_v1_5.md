@@ -219,6 +219,39 @@ The rationale appears above the meal schedule in both terminal and email output.
 
 The rationale should never summarise every slot. It should explain what was interesting or difficult about this particular week.
 
+### 4.5 Architecture Decision — Pre-assembled Context (ADR-001)
+
+**Date:** 2026-04-07  
+**Status:** Adopted (replaces the multi-turn tool loop from Phase 1 initial implementation)
+
+#### Context
+
+Phase 1 shipped a standard agentic tool-use loop: Claude called `get_calendar_constraints`, `get_recipes`, `get_rotation_history`, `get_recent_meals`, then `assign_meal` once per dinner slot, then `finalize_plan`. Dogfooding revealed:
+
+- 12+ API round-trips per planning run
+- Input tokens compounded on every call (full conversation history re-sent each time)
+- ~57k input tokens + ~1.3k output tokens for a typical week
+- ~$1.00 per run on Opus at current pricing
+- ~30 seconds wall-clock time
+
+#### Decision
+
+Collapse to a **single Claude API call** with pre-assembled context. All deterministic data-gathering (calendar, recipes, rotation history, recent meals) runs in Python before the API call. Claude receives the full context in one prompt and returns a structured plan via a single `submit_plan` tool call.
+
+#### Consequences
+
+- Cost: ~5–6k tokens per run (~$0.08–0.10) — roughly 10× cheaper
+- Latency: one network round-trip instead of 12+
+- Tradeoff: Claude cannot ask follow-up questions mid-plan or react to tool errors. Constraint validation moves entirely to post-processing in Python (same rules, different location).
+- The `assign_meal` / `assign_no_cook` / `assign_note` tools are removed; `submit_plan` is the only tool.
+
+#### What stays the same
+
+- Same `WeekPlan` output shape
+- Same hard constraint rules (enforced in Python after parsing the response)
+- Same rationale field
+- Same fallback to deterministic `Planner` on any API or parse error
+
 ---
 
 ## 5. Terminal Output Format (Phase 1)
