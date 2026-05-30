@@ -98,6 +98,93 @@ def flatten_config(cfg: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Last-week review
+# ---------------------------------------------------------------------------
+
+def _review_last_week(store, monday: date, model: str) -> None:
+    """
+    Show the previous week's plan and let the user correct what actually happened
+    before the new plan is generated. Updates recipe_history so the planner has
+    accurate recency data.
+    """
+    import anthropic
+    import json as _json
+
+    last_monday = monday - timedelta(weeks=1)
+    last_week_key = last_monday.isoformat()
+    plan = store.get_plan(last_week_key)
+    if not plan:
+        return
+
+    dinners = [d for d in plan.get("dinners", []) if not d.get("is_no_cook") and d.get("recipe_id")]
+    if not dinners:
+        return
+
+    # Display
+    week_end = last_monday + timedelta(days=6)
+    print(f"\n━━━ LAST WEEK ({last_monday.strftime('%b %-d')} – {week_end.strftime('%b %-d')}) ━━━\n")
+    all_dinners = plan.get("dinners", [])
+    for d in all_dinners:
+        weekday = d.get("weekday", "")[:3]
+        label   = d.get("label", "no cook")
+        tags    = d.get("tags") or []
+        tag_str = f"  [{', '.join(tags)}]" if tags else ""
+        print(f"  {weekday:<4}  {label}{tag_str}")
+
+    print("\nAny corrections before planning this week? (press Enter to skip): ", end="", flush=True)
+    try:
+        correction = input().strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return
+
+    if not correction:
+        return
+
+    # Build a compact recipe list for Claude to reason over
+    recipe_list = "\n".join(
+        f"  {d['recipe_id']} — {d['label']}"
+        for d in dinners
+    )
+    prompt = (
+        f"Last week's planned dinners:\n{recipe_list}\n\n"
+        f"User says: \"{correction}\"\n\n"
+        "Which recipe_ids from this list were NOT actually cooked? "
+        "Return a JSON object: {\"not_cooked\": [\"recipe-id-1\", ...]}. "
+        "Return only the JSON object, nothing else. "
+        "If nothing can be matched, return {\"not_cooked\": []}."
+    )
+
+    try:
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model=model,
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        # Strip any markdown fences
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].lstrip("json").strip()
+        parsed = _json.loads(raw)
+        not_cooked = parsed.get("not_cooked", [])
+    except Exception as exc:
+        log.warning("Could not parse last-week correction: %s", exc)
+        return
+
+    for recipe_id in not_cooked:
+        # Confirm the recipe_id is actually in last week's plan
+        if any(d.get("recipe_id") == recipe_id for d in dinners):
+            store.unplan_recipe(recipe_id, last_week_key)
+            label = next(d["label"] for d in dinners if d.get("recipe_id") == recipe_id)
+            print(f"  Got it — {label} removed from last week's records.")
+        else:
+            log.warning("Correction referenced unknown recipe_id '%s' — skipped.", recipe_id)
+
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
@@ -130,6 +217,9 @@ def cmd_plan(args, cfg: dict, flat: dict):
 
     # Run planner (agentic or legacy)
     store = StateStore(flat.get("db_path", "meal_planner.db"))
+
+    if not dry_run:
+        _review_last_week(store, monday, flat.get("model", "claude-sonnet-4-20250514"))
 
     if use_legacy:
         log.info("Using legacy deterministic planner (--legacy flag set)...")
@@ -421,6 +511,93 @@ def cmd_preview(args, cfg: dict, flat: dict):
     cmd_plan(args, cfg, flat)
 
 
+def cmd_cart(args, cfg: dict, flat: dict):
+    """Fill the Walmart cart from the approved grocery list for a given week."""
+    import asyncio
+    from state_store import StateStore
+    from planner import WeekPlan
+    from grocery_builder import GroceryBuilder
+
+    walmart_cfg = cfg.get("walmart", {})
+    if not walmart_cfg.get("enabled", False):
+        print(
+            "Walmart cart integration is disabled.\n"
+            "Set walmart.enabled: true in config.yaml to enable."
+        )
+        sys.exit(1)
+
+    try:
+        date.fromisoformat(args.week)
+    except ValueError:
+        log.error("--week must be an ISO date (YYYY-MM-DD), e.g. 2026-03-23")
+        sys.exit(1)
+
+    store = StateStore(flat.get("db_path", "meal_planner.db"))
+
+    plan_dict = store.get_plan(args.week)
+    if plan_dict is None:
+        log.error("No plan found for week %s. Run 'python main.py plan' first.", args.week)
+        store.close()
+        sys.exit(1)
+
+    if not store.is_plan_approved(args.week):
+        log.error(
+            "Plan for week %s is not approved yet. "
+            "Approve it interactively before filling the cart.",
+            args.week,
+        )
+        store.close()
+        sys.exit(1)
+
+    plan    = WeekPlan.from_dict(plan_dict)
+    grocery = GroceryBuilder(store=store).build(plan)
+
+    log.info(
+        "Grocery list: %d items to buy, %d likely on hand (excluded).",
+        len(grocery.all_items), len(grocery.likely_on_hand),
+    )
+
+    if args.dry_run:
+        print("\nDry run — grocery list that would be sent to cart filler:")
+        print(grocery.summary())
+        store.close()
+        return
+
+    from cart_filler import CartFiller
+
+    cart_cfg = {**flat, **walmart_cfg}
+    filler   = CartFiller(config=cart_cfg, grocery=grocery)
+
+    profile = cart_cfg.get("profile_dir", "~/.souschef/walmart_profile")
+    headless = cart_cfg.get("headless", False)
+    print(f"\nLaunching browser (profile: {profile}, headless: {headless}) ...")
+
+    try:
+        result = asyncio.run(filler.fill())
+    except Exception as exc:
+        log.error("Cart fill failed: %s", exc)
+        store.close()
+        sys.exit(1)
+
+    store.close()
+
+    # Summary
+    if result.pantry_staples:
+        staple_str = ", ".join(result.pantry_staples)
+        print(f"Skipped {len(result.pantry_staples)} pantry staple(s) ({staple_str}) — assumed on hand.")
+
+    parts = [f"Added {len(result.added)} item(s)."]
+    if result.skipped:
+        parts.append(f"{len(result.skipped)} already in cart (skipped).")
+    if result.needs_review:
+        detail = ", ".join(f"[{i.name} — {i.note}]" for i in result.needs_review)
+        parts.append(f"{len(result.needs_review)} need review: {detail}.")
+    if result.not_found:
+        detail = ", ".join(f"[{i.name}]" for i in result.not_found)
+        parts.append(f"Not found: {detail}.")
+    print(" ".join(parts))
+
+
 # ---------------------------------------------------------------------------
 # CLI wiring
 # ---------------------------------------------------------------------------
@@ -513,6 +690,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also promote the recipe to onRotation"
     )
     p_rate.set_defaults(func=cmd_rate)
+
+    # cart
+    p_cart = sub.add_parser("cart", help="Fill the Walmart cart from an approved grocery list")
+    p_cart.add_argument(
+        "--week", required=True,
+        help="Monday date of the plan week, e.g. 2026-03-23",
+    )
+    p_cart.add_argument(
+        "--dry-run", action="store_true",
+        help="Print grocery list without filling the cart",
+    )
+    p_cart.set_defaults(func=cmd_cart)
 
     return parser
 

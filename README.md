@@ -21,7 +21,8 @@ Every week (typically Thursday), you run `python main.py plan`. The tool:
 ### 1. Python dependencies
 
 ```bash
-pip install anthropic pyyaml google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+pip install anthropic playwright pyyaml google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+playwright install chromium
 ```
 
 ### 2. Anthropic API key
@@ -160,6 +161,7 @@ id: hamburger-steaks-with-onion-gravy
 name: Hamburger Steaks with Onion Gravy
 tags:
   - onRotation
+season: null          # optional: spring | summer | fall | winter
 servings: '4'
 prep_time: null
 cook_time: 40 minutes

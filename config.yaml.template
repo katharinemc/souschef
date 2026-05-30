@@ -64,3 +64,13 @@ anthropic:
 # -----------------------------------------------------------------------------
 reply_handler:
   poll_interval_seconds: 3600        # How often to check for replies (1 hour)
+
+# -----------------------------------------------------------------------------
+# Walmart cart integration
+# Requires Chrome open with the Claude in Chrome extension active.
+# Run: python main.py cart --week YYYY-MM-DD
+# -----------------------------------------------------------------------------
+walmart:
+  enabled: false
+  profile_dir: "~/.souschef/walmart_profile"  # Playwright saves your Walmart session here
+  headless: false                              # Set true after first login to run silently

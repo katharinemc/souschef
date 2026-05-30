@@ -282,6 +282,13 @@ class StateStore:
                 (week_key,)
             )
 
+    def is_plan_approved(self, week_key: str) -> bool:
+        """Return True if the plan for this week has been approved."""
+        row = self._conn.execute(
+            "SELECT approved FROM weekly_plans WHERE week_key = ?", (week_key,)
+        ).fetchone()
+        return bool(row["approved"]) if row else False
+
     def get_plan(self, week_key: str) -> Optional[dict]:
         """Retrieve a stored plan by week key."""
         row = self._conn.execute(
@@ -413,6 +420,39 @@ class StateStore:
                   )
             """, (recipe_id, recipe_id))
         log.info("Promoted experiment recipe: %s", recipe_id)
+
+    # -----------------------------------------------------------------------
+    # Last-week corrections
+    # -----------------------------------------------------------------------
+
+    def unplan_recipe(self, recipe_id: str, week_key: str):
+        """
+        Remove a recipe from a week's record and revert last_planned to its
+        most recent prior occurrence. Called when the user says they didn't
+        actually cook a planned recipe.
+        """
+        with self._transaction():
+            self._conn.execute(
+                "DELETE FROM planned_meals WHERE week_key = ? AND recipe_id = ?",
+                (week_key, recipe_id),
+            )
+            # Revert last_planned to the next most recent planned date still in the DB
+            row = self._conn.execute(
+                "SELECT MAX(meal_date) FROM planned_meals WHERE recipe_id = ?",
+                (recipe_id,),
+            ).fetchone()
+            prev_date = row[0] if row and row[0] else None
+            if prev_date:
+                self._conn.execute(
+                    "UPDATE recipe_history SET last_planned = ? WHERE recipe_id = ?",
+                    (prev_date, recipe_id),
+                )
+            else:
+                self._conn.execute(
+                    "DELETE FROM recipe_history WHERE recipe_id = ?",
+                    (recipe_id,),
+                )
+        log.info("Unplanned recipe %s from week %s", recipe_id, week_key)
 
     # -----------------------------------------------------------------------
     # Meal notes

@@ -41,6 +41,27 @@ MODEL = "claude-opus-4-5"
 
 MEATLESS_TAGS = {"vegetarian", "pescatarian", "vegan"}
 ALWAYS_MEATLESS_WEEKDAYS = {2, 4}  # Wednesday, Friday
+EXPERIMENT_EXCLUDED_TAGS = {"vegetarian", "vegan"}  # pescatarian experiments are fine
+
+SEASON_MONTHS = {
+    "spring": {3, 4, 5},
+    "summer": {6, 7, 8},
+    "fall":   {9, 10, 11},
+    "winter": {12, 1, 2},
+}
+
+
+def _current_season(today: date) -> str:
+    for season, months in SEASON_MONTHS.items():
+        if today.month in months:
+            return season
+    return "spring"  # unreachable
+
+
+def _recipe_in_season(recipe: dict, season: str) -> bool:
+    """Return True if the recipe has no season restriction or matches the current season."""
+    s = recipe.get("season")
+    return not s or s.lower() == season
 
 
 # ---------------------------------------------------------------------------
@@ -164,10 +185,12 @@ def _build_context_message(
             recent_ids.add(row["recipe_id"])
 
     # --- Recipes ---
+    season = _current_season(today)
+    in_season = {rid: r for rid, r in recipes.items() if _recipe_in_season(r, season)}
     lines.append("## AVAILABLE RECIPES")
     lines.append("id | name | tags | last_planned | cook_time")
     lines.append("")
-    for recipe in sorted(recipes.values(), key=lambda r: r["name"]):
+    for recipe in sorted(in_season.values(), key=lambda r: r["name"]):
         rid = recipe["id"]
         tags = ", ".join(sorted(recipe.get("tags") or []))
         last = all_last.get(rid)
@@ -211,7 +234,7 @@ Study it, then call submit_plan() exactly once with all 7 dinners assigned.
 - Fasting days marked on the calendar are meatless.
 - Saturday and Sunday: cook one or the other, never both. Saturday takes priority.
   Sunday only cooks if Saturday was no-cook, and then must be an easy recipe.
-- Experiment recipes are scheduled only on open Saturdays.
+- Experiment recipes are scheduled only on open Saturdays and must not be vegetarian or vegan (pescatarian is fine).
 - Calendar events after 3pm that are prefixed KRM or Family = no-cook day.
 
 ## SCHEDULING PREFERENCES
@@ -409,6 +432,13 @@ class AgenticPlanner:
                     tags=[], ingredients=[],
                     is_no_cook=True, is_meatless=True,
                     is_fasting=dc.is_fasting,
+                )
+
+            # Constraint check: experiment recipes must not be vegetarian/vegan
+            if "experiment" in recipe_tags and recipe_tags & EXPERIMENT_EXCLUDED_TAGS:
+                log.warning(
+                    "submit_plan assigned vegetarian/vegan experiment on %s — check plan.",
+                    dc.date,
                 )
 
             return MealSlot(

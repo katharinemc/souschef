@@ -137,6 +137,44 @@ class WeekPlan:
             } if self.lunch else None,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "WeekPlan":
+        """Reconstruct a WeekPlan from a stored plan dict (inverse of to_dict)."""
+        monday = date.fromisoformat(data["week_start_monday"])
+        plan = cls(
+            week_start_monday=monday,
+            week_key=data["week_key"],
+            cook_nights=data.get("cook_nights", 0),
+            warnings=data.get("warnings", []),
+            rationale=data.get("rationale", ""),
+        )
+        for d in data.get("dinners", []):
+            plan.dinners.append(MealSlot(
+                date=date.fromisoformat(d["date"]),
+                slot=d.get("slot", "dinner"),
+                recipe_id=d.get("recipe_id"),
+                label=d.get("label", ""),
+                tags=d.get("tags") or [],
+                ingredients=d.get("ingredients") or [],
+                notes=d.get("notes") or [],
+                is_no_cook=d.get("is_no_cook", False),
+                is_meatless=d.get("is_meatless", False),
+                is_fasting=d.get("is_fasting", False),
+                note_type=d.get("note_type"),
+                note_text=d.get("note_text"),
+            ))
+        if lj := data.get("lunch"):
+            plan.lunch = MealSlot(
+                date=monday, slot="lunch",
+                recipe_id=lj.get("lunch_id"),
+                label=lj.get("label", ""),
+                tags=[], ingredients=lj.get("ingredients") or [],
+                notes=lj.get("notes") or [],
+                note_type=lj.get("note_type"),
+                note_text=lj.get("note_text"),
+            )
+        return plan
+
     def to_state_meals(self) -> list[dict]:
         """Convert to the flat list format expected by StateStore.record_plan."""
         rows = []
