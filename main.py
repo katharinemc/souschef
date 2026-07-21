@@ -101,14 +101,15 @@ def flatten_config(cfg: dict) -> dict:
 # Last-week review
 # ---------------------------------------------------------------------------
 
-def _review_last_week(store, monday: date, model: str) -> None:
+def _review_last_week(store, monday: date, model: str, recipe_dir: str = "recipes_yaml") -> None:
     """
     Show the previous week's plan and let the user correct what actually happened
-    before the new plan is generated. Updates recipe_history so the planner has
-    accurate recency data.
+    before the new plan is generated. Handles both skipped recipes (not_cooked)
+    and substitutions ("we made X instead of Y"), updating recipe history accordingly.
     """
     import anthropic
     import json as _json
+    from planner import load_recipes
 
     last_monday = monday - timedelta(weeks=1)
     last_week_key = last_monday.isoformat()
@@ -116,14 +117,14 @@ def _review_last_week(store, monday: date, model: str) -> None:
     if not plan:
         return
 
-    dinners = [d for d in plan.get("dinners", []) if not d.get("is_no_cook") and d.get("recipe_id")]
+    all_dinners = plan.get("dinners", [])
+    dinners = [d for d in all_dinners if not d.get("is_no_cook") and d.get("recipe_id")]
     if not dinners:
         return
 
-    # Display
+    # Display last week
     week_end = last_monday + timedelta(days=6)
     print(f"\n━━━ LAST WEEK ({last_monday.strftime('%b %-d')} – {week_end.strftime('%b %-d')}) ━━━\n")
-    all_dinners = plan.get("dinners", [])
     for d in all_dinners:
         weekday = d.get("weekday", "")[:3]
         label   = d.get("label", "no cook")
@@ -141,45 +142,110 @@ def _review_last_week(store, monday: date, model: str) -> None:
     if not correction:
         return
 
-    # Build a compact recipe list for Claude to reason over
+    # Load full recipe library for fuzzy matching
+    all_recipes = load_recipes(recipe_dir)
+
+    # Compact list of planned cook nights (for prompt context)
     recipe_list = "\n".join(
         f"  {d['recipe_id']} — {d['label']}"
         for d in dinners
     )
+
+    # Full library list (for Claude to fuzzy-match substitutions against)
+    library_lines = "\n".join(
+        f"  {rid} — {r.get('name', rid)}"
+        for rid, r in all_recipes.items()
+    )
+
+    # Day-name → ISO date mapping so Claude can resolve "Monday" → "2026-07-13"
+    date_by_weekday: dict[str, str] = {}
+    for d in all_dinners:
+        d_date = d.get("date")
+        d_weekday = d.get("weekday", "").lower()
+        if d_date and d_weekday:
+            date_by_weekday[d_weekday] = d_date
+    day_map_lines = "\n".join(f"  {day}: {dt}" for day, dt in date_by_weekday.items())
+
     prompt = (
-        f"Last week's planned dinners:\n{recipe_list}\n\n"
+        f"Last week's planned cook nights:\n{recipe_list}\n\n"
+        f"Full recipe library (for matching substitutions):\n{library_lines}\n\n"
+        f"Day-to-date mapping for last week:\n{day_map_lines}\n\n"
         f"User says: \"{correction}\"\n\n"
-        "Which recipe_ids from this list were NOT actually cooked? "
-        "Return a JSON object: {\"not_cooked\": [\"recipe-id-1\", ...]}. "
-        "Return only the JSON object, nothing else. "
-        "If nothing can be matched, return {\"not_cooked\": []}."
+        "Return a JSON object with this exact shape:\n"
+        "{\n"
+        "  \"not_cooked\": [\"recipe-id\"],\n"
+        "  \"substitutions\": [\n"
+        "    {\n"
+        "      \"original_recipe_id\": \"planned-recipe-id-or-null\",\n"
+        "      \"recipe_id\": \"matched-library-id-or-null\",\n"
+        "      \"free_text\": \"what they said they cooked\",\n"
+        "      \"cook_date\": \"YYYY-MM-DD-or-null\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "recipe_id must be an exact id from the full recipe library, or null.\n"
+        "cook_date: use the day-to-date mapping if a day name is mentioned, else null.\n"
+        "original_recipe_id: the planned recipe being replaced, or null if not specified.\n"
+        "substitutions may be an empty list.\n"
+        "Return only the JSON object, nothing else."
     )
 
     try:
         client = anthropic.Anthropic()
         resp = client.messages.create(
             model=model,
-            max_tokens=256,
+            max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.content[0].text.strip()
-        # Strip any markdown fences
         if raw.startswith("```"):
             raw = raw.split("```")[1].lstrip("json").strip()
         parsed = _json.loads(raw)
-        not_cooked = parsed.get("not_cooked", [])
+        not_cooked    = parsed.get("not_cooked", [])
+        substitutions = parsed.get("substitutions", [])
     except Exception as exc:
         log.warning("Could not parse last-week correction: %s", exc)
         return
 
+    # Apply not_cooked: remove recipe from history
     for recipe_id in not_cooked:
-        # Confirm the recipe_id is actually in last week's plan
         if any(d.get("recipe_id") == recipe_id for d in dinners):
             store.unplan_recipe(recipe_id, last_week_key)
             label = next(d["label"] for d in dinners if d.get("recipe_id") == recipe_id)
-            print(f"  Got it — {label} removed from last week's records.")
+            print(f"  Got it — {label} cleared from last week's records.")
         else:
             log.warning("Correction referenced unknown recipe_id '%s' — skipped.", recipe_id)
+
+    # Apply substitutions: record what was actually cooked
+    for sub in substitutions:
+        rid        = sub.get("recipe_id")
+        free_text  = sub.get("free_text") or ""
+        cook_date  = sub.get("cook_date")
+        orig_rid   = sub.get("original_recipe_id")
+
+        # Infer cook_date from the original slot when Claude couldn't determine it
+        if not cook_date and orig_rid:
+            orig_slot = next(
+                (d for d in all_dinners if d.get("recipe_id") == orig_rid), None
+            )
+            if orig_slot:
+                cook_date = orig_slot.get("date")
+
+        # Final fallback: Monday of last week
+        if not cook_date:
+            cook_date = last_week_key
+
+        if rid and rid in all_recipes:
+            recipe_name = all_recipes[rid].get("name", rid)
+            cook_date_fmt = date.fromisoformat(cook_date).strftime("%a %b %-d")
+            store.set_last_planned(rid, date.fromisoformat(cook_date))
+            print(f"  Got it — {recipe_name} recorded as cooked {cook_date_fmt}.")
+        else:
+            store.record_meal_note(last_week_key, cook_date, "cook", free_text)
+            print(
+                f"  Got it — \"{free_text}\" noted "
+                f"(not in recipe library — won't affect rotation timing)."
+            )
 
     print()
 
@@ -219,7 +285,12 @@ def cmd_plan(args, cfg: dict, flat: dict):
     store = StateStore(flat.get("db_path", "meal_planner.db"))
 
     if not dry_run:
-        _review_last_week(store, monday, flat.get("model", "claude-sonnet-4-20250514"))
+        _review_last_week(
+            store,
+            monday,
+            flat.get("model", "claude-sonnet-4-20250514"),
+            flat.get("recipe_dir", "recipes_yaml"),
+        )
 
     if use_legacy:
         log.info("Using legacy deterministic planner (--legacy flag set)...")

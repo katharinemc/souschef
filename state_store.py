@@ -473,6 +473,17 @@ class StateStore:
             """, (week_key, meal_date, note_type, note_text))
         log.info("Recorded %s note for %s: %s", note_type, meal_date, note_text)
 
+    def get_meal_notes(self, week_key: str) -> list[dict]:
+        """Return all meal notes for a given week_key as a list of dicts."""
+        rows = self._conn.execute(
+            "SELECT meal_date, note_type, note_text FROM meal_notes WHERE week_key = ?",
+            (week_key,),
+        ).fetchall()
+        return [
+            {"meal_date": r[0], "note_type": r[1], "note_text": r[2]}
+            for r in rows
+        ]
+
     # -----------------------------------------------------------------------
     # Debug / inspection
     # -----------------------------------------------------------------------
