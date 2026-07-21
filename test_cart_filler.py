@@ -147,7 +147,7 @@ class TestCartFillerHelpers(unittest.TestCase):
     def _make_filler(self, *names):
         from cart_filler import CartFiller
         grocery = _make_grocery(*names)
-        cfg = {"model": "claude-test", "profile_dir": "/tmp/test_profile", "headless": True}
+        cfg = {"model": "claude-test", "cdp_url": "http://localhost:9222"}
         return CartFiller(config=cfg, grocery=grocery)
 
     def test_split_items_separates_staples(self):
@@ -198,7 +198,7 @@ class TestCartFillerAgentLoop(unittest.IsolatedAsyncioTestCase):
     def _make_filler(self, *names):
         from cart_filler import CartFiller
         grocery = _make_grocery(*(names or ("ground beef", "onion")))
-        cfg = {"model": "claude-test", "profile_dir": "/tmp/test_profile", "headless": True}
+        cfg = {"model": "claude-test", "cdp_url": "http://localhost:9222"}
         f = CartFiller(config=cfg, grocery=grocery)
         f.max_iterations = 10
         return f
@@ -331,8 +331,7 @@ class TestCmdCart(unittest.TestCase):
         cfg = {
             "walmart": {
                 "enabled": walmart_enabled,
-                "profile_dir": "/tmp/test_profile",
-                "headless": True,
+                "cdp_url": "http://localhost:9222",
             },
         }
         flat = {"db_path": self.tmp.name, "recipe_dir": "recipes_yaml", "model": "claude-test"}
