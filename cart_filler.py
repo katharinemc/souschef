@@ -14,7 +14,7 @@ One-time setup:
   3. Log into Walmart in that Chrome window.
   Future runs: just have Chrome open (the alias starts it if not already running).
 
-Requires: pip install playwright && playwright install chromium
+Requires: pip install playwright
 """
 
 import logging
@@ -235,6 +235,10 @@ class CartFiller:
                     "Start Chrome with remote debugging enabled:\n"
                     "  chrome-debug\n"
                     "(Add the alias to ~/.zshrc — see README for setup.)"
+                )
+            if not browser.contexts:
+                raise RuntimeError(
+                    "Chrome is running but has no open windows. Open a tab and try again."
                 )
             context = browser.contexts[0]
             page = await context.new_page()
