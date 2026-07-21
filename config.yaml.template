@@ -67,10 +67,9 @@ reply_handler:
 
 # -----------------------------------------------------------------------------
 # Walmart cart integration
-# Requires Chrome open with the Claude in Chrome extension active.
 # Run: python main.py cart --week YYYY-MM-DD
+# Requires Chrome running with remote debugging — see README for setup.
 # -----------------------------------------------------------------------------
 walmart:
   enabled: false
-  profile_dir: "~/.souschef/walmart_profile"  # Playwright saves your Walmart session here
-  headless: false                              # Set true after first login to run silently
+  cdp_url: "http://localhost:9222"   # Connect to Chrome with: chrome-debug (see README)

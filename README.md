@@ -262,6 +262,48 @@ The planner selects from this list. If the file is missing or empty, no lunch is
 
 ---
 
+## Walmart cart filling
+
+```bash
+python main.py cart --week YYYY-MM-DD
+```
+
+Connects to your running Chrome instance and adds the week's grocery items to your Walmart cart. Because it uses your real Chrome session, Walmart sees a normal browser — no bot detection issues.
+
+### First-time Chrome setup
+
+The cart filler connects to your running Chrome instance so Walmart sees your real browser and session.
+
+**Add the `chrome-debug` alias to `~/.zshrc`:**
+
+```bash
+alias chrome-debug='/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --profile-directory=Default &'
+```
+
+Then reload your shell:
+
+```bash
+source ~/.zshrc
+```
+
+**One-time login:**
+
+```bash
+chrome-debug        # opens Chrome with remote debugging on port 9222
+```
+
+Log into Walmart in that Chrome window. You only need to do this once — your session is preserved.
+
+**Every subsequent run:**
+
+Just have Chrome open (the alias starts it with the debug port if it isn't already running). Then:
+
+```bash
+python main.py cart --week YYYY-MM-DD
+```
+
+---
+
 ## Database
 
 Plans and rotation history are stored in `meal_planner.db` (SQLite). The database is created automatically on first run. Key tables:

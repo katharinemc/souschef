@@ -568,9 +568,9 @@ def cmd_cart(args, cfg: dict, flat: dict):
     cart_cfg = {**flat, **walmart_cfg}
     filler   = CartFiller(config=cart_cfg, grocery=grocery)
 
-    profile = cart_cfg.get("profile_dir", "~/.souschef/walmart_profile")
-    headless = cart_cfg.get("headless", False)
-    print(f"\nLaunching browser (profile: {profile}, headless: {headless}) ...")
+    cdp_url = cart_cfg.get("cdp_url", "http://localhost:9222")
+    print(f"\nConnecting to Chrome at {cdp_url} ...")
+    print("(If this fails, start Chrome with: chrome-debug — see README for setup.)")
 
     try:
         result = asyncio.run(filler.fill())
