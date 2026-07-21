@@ -272,13 +272,13 @@ Connects to your running Chrome instance and adds the week's grocery items to yo
 
 ### First-time Chrome setup
 
-The cart filler connects to your running Chrome instance so Walmart sees your real browser and session.
-
 **Add the `chrome-debug` alias to `~/.zshrc`:**
 
 ```bash
 alias chrome-debug='/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --profile-directory=Default &'
 ```
+
+> **Note:** If Chrome is already open, quit it first before running `chrome-debug`. Running the alias while Chrome is open starts a second instance — the existing one does not gain a debug port.
 
 Then reload your shell:
 
@@ -296,7 +296,7 @@ Log into Walmart in that Chrome window. You only need to do this once — your s
 
 **Every subsequent run:**
 
-Just have Chrome open (the alias starts it with the debug port if it isn't already running). Then:
+Start Chrome with `chrome-debug`, then run the cart command:
 
 ```bash
 python main.py cart --week YYYY-MM-DD

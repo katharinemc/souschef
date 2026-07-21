@@ -71,5 +71,5 @@ reply_handler:
 # Requires Chrome running with remote debugging — see README for setup.
 # -----------------------------------------------------------------------------
 walmart:
-  enabled: false
+  enabled: false            # Set to true to activate cart filling
   cdp_url: "http://localhost:9222"   # Connect to Chrome with: chrome-debug (see README)
