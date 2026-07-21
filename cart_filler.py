@@ -4,14 +4,15 @@ cart_filler.py
 Fills a Walmart cart from a GroceryList using an iterative Claude agent loop
 backed by Playwright browser automation.
 
-The browser session is persisted to a local profile directory so the user only
-needs to log into Walmart once. Subsequent runs reuse the saved session.
+Connects to the user's running Chrome instance via CDP (Chrome DevTools Protocol)
+so Walmart sees a real browser with a real session — no bot detection.
 
-First-time setup:
-  1. Set walmart.enabled: true and walmart.headless: false in config.yaml
-  2. Run: python main.py cart --week YYYY-MM-DD
-  3. Log into Walmart in the browser window that opens, then press Enter
-  4. Set walmart.headless: true for future runs (optional)
+One-time setup:
+  1. Add to ~/.zshrc:
+       alias chrome-debug='/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --profile-directory=Default &'
+  2. Run: chrome-debug
+  3. Log into Walmart in that Chrome window.
+  Future runs: just have Chrome open (the alias starts it if not already running).
 
 Requires: pip install playwright && playwright install chromium
 """
@@ -19,7 +20,6 @@ Requires: pip install playwright && playwright install chromium
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
@@ -211,14 +211,13 @@ class CartFiller:
     def __init__(self, config: dict, grocery: GroceryList):
         self.client      = anthropic.Anthropic(api_key=config.get("api_key") or None)
         self.model       = config.get("model", "claude-opus-4-5")
-        self.profile_dir = Path(config.get("profile_dir", "~/.souschef/walmart_profile")).expanduser()
-        self.headless    = config.get("headless", False)
+        self.cdp_url     = config.get("cdp_url", "http://localhost:9222")
         self.grocery     = grocery
         self.max_iterations = 150   # ~3 tool calls per item × 50 items
         self._last_results: list[dict] = []   # most recent search_walmart results
 
     async def fill(self) -> CartResult:
-        """Launch persistent Playwright context and run the cart-filling agent loop."""
+        """Connect to running Chrome via CDP and run the cart-filling agent loop."""
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -227,54 +226,42 @@ class CartFiller:
                 "Install it with: pip install playwright && playwright install chromium"
             )
 
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
-
-        from playwright_stealth import Stealth
-
-        async with Stealth().use_async(async_playwright()) as pw:
-            context = await pw.chromium.launch_persistent_context(
-                str(self.profile_dir),
-                headless=self.headless,
-                channel="chrome",
-                args=["--no-sandbox"],
-            )
+        async with async_playwright() as pw:
+            try:
+                browser = await pw.chromium.connect_over_cdp(self.cdp_url)
+            except Exception:
+                raise RuntimeError(
+                    f"Could not connect to Chrome at {self.cdp_url}.\n"
+                    "Start Chrome with remote debugging enabled:\n"
+                    "  chrome-debug\n"
+                    "(Add the alias to ~/.zshrc — see README for setup.)"
+                )
+            context = browser.contexts[0]
             page = await context.new_page()
             try:
                 await self._ensure_session(page)
                 return await self._run_agent_loop(page)
             finally:
-                await context.close()
+                await page.close()
 
     # -----------------------------------------------------------------------
     # Session management
     # -----------------------------------------------------------------------
 
     async def _ensure_session(self, page) -> None:
-        """
-        Navigate to Walmart and verify the session is active.
-        If not logged in: headed mode prompts the user; headless mode raises.
-        """
+        """Verify Walmart session is active in the connected Chrome instance."""
         await page.goto("https://www.walmart.com", wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
 
-        # Detect sign-in state: "Sign In" link present means not logged in
         sign_in = await page.query_selector('a[link-identifier="header-signin"], [data-testid="header-signin-btn"]')
         if sign_in is None:
             log.debug("Walmart session active.")
             return
 
-        if self.headless:
-            raise RuntimeError(
-                "Not logged into Walmart and running headless.\n"
-                "Set walmart.headless: false in config.yaml, run once to log in, "
-                "then switch back to headless."
-            )
-
-        print(
-            "\nNot logged into Walmart. Please log in using the browser window that just opened,\n"
-            "then press Enter here to continue..."
+        raise RuntimeError(
+            "Not logged into Walmart in the connected Chrome window.\n"
+            "Please log into Walmart in Chrome, then run the cart command again."
         )
-        input()
 
     # -----------------------------------------------------------------------
     # Agent loop
