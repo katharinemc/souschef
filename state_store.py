@@ -479,10 +479,7 @@ class StateStore:
             "SELECT meal_date, note_type, note_text FROM meal_notes WHERE week_key = ?",
             (week_key,),
         ).fetchall()
-        return [
-            {"meal_date": r[0], "note_type": r[1], "note_text": r[2]}
-            for r in rows
-        ]
+        return [dict(r) for r in rows]
 
     # -----------------------------------------------------------------------
     # Debug / inspection

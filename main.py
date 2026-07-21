@@ -176,10 +176,10 @@ def _review_last_week(store, monday: date, model: str, recipe_dir: str = "recipe
         "  \"not_cooked\": [\"recipe-id\"],\n"
         "  \"substitutions\": [\n"
         "    {\n"
-        "      \"original_recipe_id\": \"planned-recipe-id-or-null\",\n"
-        "      \"recipe_id\": \"matched-library-id-or-null\",\n"
+        "      \"original_recipe_id\": null,\n"
+        "      \"recipe_id\": null,\n"
         "      \"free_text\": \"what they said they cooked\",\n"
-        "      \"cook_date\": \"YYYY-MM-DD-or-null\"\n"
+        "      \"cook_date\": null\n"
         "    }\n"
         "  ]\n"
         "}\n"
@@ -218,34 +218,42 @@ def _review_last_week(store, monday: date, model: str, recipe_dir: str = "recipe
 
     # Apply substitutions: record what was actually cooked
     for sub in substitutions:
-        rid        = sub.get("recipe_id")
-        free_text  = sub.get("free_text") or ""
-        cook_date  = sub.get("cook_date")
-        orig_rid   = sub.get("original_recipe_id")
+        try:
+            rid        = sub.get("recipe_id")
+            free_text  = sub.get("free_text") or ""
+            cook_date  = sub.get("cook_date")
+            orig_rid   = sub.get("original_recipe_id")
 
-        # Infer cook_date from the original slot when Claude couldn't determine it
-        if not cook_date and orig_rid:
-            orig_slot = next(
-                (d for d in all_dinners if d.get("recipe_id") == orig_rid), None
-            )
-            if orig_slot:
-                cook_date = orig_slot.get("date")
+            if not rid and not free_text:
+                continue
 
-        # Final fallback: Monday of last week
-        if not cook_date:
-            cook_date = last_week_key
+            # Infer cook_date from the original slot when Claude couldn't determine it
+            if not cook_date and orig_rid:
+                orig_slot = next(
+                    (d for d in all_dinners if d.get("recipe_id") == orig_rid), None
+                )
+                if orig_slot:
+                    cook_date = orig_slot.get("date")
 
-        if rid and rid in all_recipes:
-            recipe_name = all_recipes[rid].get("name", rid)
-            cook_date_fmt = date.fromisoformat(cook_date).strftime("%a %b %-d")
-            store.set_last_planned(rid, date.fromisoformat(cook_date))
-            print(f"  Got it — {recipe_name} recorded as cooked {cook_date_fmt}.")
-        else:
-            store.record_meal_note(last_week_key, cook_date, "cook", free_text)
-            print(
-                f"  Got it — \"{free_text}\" noted "
-                f"(not in recipe library — won't affect rotation timing)."
-            )
+            # Final fallback: Monday of last week
+            if not cook_date:
+                cook_date = last_week_key
+
+            if rid and rid in all_recipes:
+                recipe_name = all_recipes[rid].get("name", rid)
+                cook_date_fmt = date.fromisoformat(cook_date).strftime("%a %b %-d")
+                store.set_last_planned(rid, date.fromisoformat(cook_date))
+                print(f"  Got it — {recipe_name} recorded as cooked {cook_date_fmt}.")
+            else:
+                cook_date_fmt = date.fromisoformat(cook_date).strftime("%a %b %-d")
+                store.record_meal_note(last_week_key, cook_date, "cook", free_text)
+                print(
+                    f"  Got it — \"{free_text}\" noted for {cook_date_fmt} "
+                    f"(not in recipe library — won't affect rotation timing)."
+                )
+        except Exception as exc:
+            log.warning("Could not apply substitution %s: %s", sub, exc)
+            continue
 
     print()
 
