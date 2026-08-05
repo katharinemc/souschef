@@ -297,6 +297,16 @@ class StateStore:
         ).fetchone()
         return json.loads(row["plan_json"]) if row else None
 
+    def get_draft_plan(self) -> Optional[tuple]:
+        """Return (week_key, plan_dict) for the most recent unapproved plan, or None."""
+        row = self._conn.execute(
+            "SELECT week_key, plan_json FROM weekly_plans "
+            "WHERE approved = 0 ORDER BY week_key DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            return row["week_key"], json.loads(row["plan_json"])
+        return None
+
     def get_current_week_key(self) -> str:
         """Return the week key for the current calendar week."""
         return _week_key_for_date(date.today())
@@ -485,6 +495,15 @@ class StateStore:
     # Debug / inspection
     # -----------------------------------------------------------------------
 
+    def get_plan_status(self, week_key: str) -> Optional[str]:
+        """Return 'confirmed', 'draft', or None if no plan exists for the week."""
+        row = self._conn.execute(
+            "SELECT approved FROM weekly_plans WHERE week_key = ?", (week_key,)
+        ).fetchone()
+        if row is None:
+            return None
+        return "confirmed" if row["approved"] else "draft"
+
     def summary(self) -> dict:
         """Return a summary dict for logging/debugging."""
         recipe_count = self._conn.execute(
@@ -502,10 +521,14 @@ class StateStore:
         newest = self._conn.execute(
             "SELECT MAX(meal_date) FROM planned_meals"
         ).fetchone()[0]
+        draft_row = self._conn.execute(
+            "SELECT week_key FROM weekly_plans WHERE approved = 0 ORDER BY week_key DESC LIMIT 1"
+        ).fetchone()
         return {
             "tracked_recipes": recipe_count,
             "weeks_stored":    plan_count,
             "meal_rows":       meal_count,
             "oldest_meal":     oldest,
             "newest_meal":     newest,
+            "draft_week":      draft_row["week_key"] if draft_row else None,
         }

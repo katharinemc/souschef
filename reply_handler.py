@@ -475,6 +475,58 @@ def _promote_recipe_yaml(recipe_id: str, store=None) -> None:
         log.info("Added onRotation tag to %s", yaml_path)
 
 
+def reconstruct_plan(plan_dict: dict) -> WeekPlan:
+    """
+    Rebuild a WeekPlan dataclass from a JSON dict stored in SQLite.
+
+    Module-level so it can be imported directly by cmd_amend without
+    constructing a full ReplyHandler.
+    """
+    from planner import WeekPlan, MealSlot
+
+    monday = date.fromisoformat(plan_dict["week_start_monday"])
+    plan = WeekPlan(
+        week_start_monday=monday,
+        week_key=plan_dict["week_key"],
+        cook_nights=plan_dict.get("cook_nights", 0),
+        warnings=list(plan_dict.get("warnings", [])),
+        rationale=plan_dict.get("rationale", ""),
+    )
+
+    for d in plan_dict.get("dinners", []):
+        slot = MealSlot(
+            date=date.fromisoformat(d["date"]),
+            slot=d["slot"],
+            recipe_id=d.get("recipe_id"),
+            label=d["label"],
+            tags=list(d.get("tags") or []),
+            ingredients=list(d.get("ingredients") or []),
+            notes=list(d.get("notes") or []),
+            is_no_cook=d.get("is_no_cook", False),
+            is_meatless=d.get("is_meatless", False),
+            is_fasting=d.get("is_fasting", False),
+            note_type=d.get("note_type"),
+            note_text=d.get("note_text"),
+        )
+        plan.dinners.append(slot)
+
+    lunch_dict = plan_dict.get("lunch")
+    if lunch_dict:
+        plan.lunch = MealSlot(
+            date=monday,
+            slot="lunch",
+            recipe_id=lunch_dict.get("lunch_id"),
+            label=lunch_dict.get("label", ""),
+            tags=[],
+            ingredients=list(lunch_dict.get("ingredients") or []),
+            notes=list(lunch_dict.get("notes") or []),
+            note_type=lunch_dict.get("note_type"),
+            note_text=lunch_dict.get("note_text"),
+        )
+
+    return plan
+
+
 def _dummy_dc(d: date):
     """Return a minimal DayConstraints for a date (no calendar lookup needed)."""
     from calendar_reader import DayConstraints
@@ -667,53 +719,7 @@ class ReplyHandler:
     # -----------------------------------------------------------------------
 
     def _reconstruct_plan(self, plan_dict: dict) -> WeekPlan:
-        """
-        Rebuild a WeekPlan dataclass from the JSON dict stored in SQLite.
-        Only the fields needed for mutation are reconstructed.
-        """
-        from planner import WeekPlan, MealSlot
-
-        monday = date.fromisoformat(plan_dict["week_start_monday"])
-        plan = WeekPlan(
-            week_start_monday=monday,
-            week_key=plan_dict["week_key"],
-            cook_nights=plan_dict.get("cook_nights", 0),
-            warnings=list(plan_dict.get("warnings", [])),
-            rationale=plan_dict.get("rationale", ""),
-        )
-
-        for d in plan_dict.get("dinners", []):
-            slot = MealSlot(
-                date=date.fromisoformat(d["date"]),
-                slot=d["slot"],
-                recipe_id=d.get("recipe_id"),
-                label=d["label"],
-                tags=list(d.get("tags") or []),
-                ingredients=list(d.get("ingredients") or []),
-                notes=list(d.get("notes") or []),
-                is_no_cook=d.get("is_no_cook", False),
-                is_meatless=d.get("is_meatless", False),
-                is_fasting=d.get("is_fasting", False),
-                note_type=d.get("note_type"),
-                note_text=d.get("note_text"),
-            )
-            plan.dinners.append(slot)
-
-        lunch_dict = plan_dict.get("lunch")
-        if lunch_dict:
-            plan.lunch = MealSlot(
-                date=monday,
-                slot="lunch",
-                recipe_id=lunch_dict.get("lunch_id"),
-                label=lunch_dict.get("label", ""),
-                tags=[],
-                ingredients=list(lunch_dict.get("ingredients") or []),
-                notes=list(lunch_dict.get("notes") or []),
-                note_type=lunch_dict.get("note_type"),
-                note_text=lunch_dict.get("note_text"),
-            )
-
-        return plan
+        return reconstruct_plan(plan_dict)
 
 
 # ---------------------------------------------------------------------------

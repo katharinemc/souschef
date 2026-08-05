@@ -44,6 +44,12 @@ class TestStateStore(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.db = StateStore(self.tmp.name)
+        # Use dynamic dates so plans aren't purged by the 4-month history cutoff.
+        today = date.today()
+        self.week_key = _week_key_for_date(today)
+        self.meal_date = today.isoformat()
+        self.prev_week_key = _week_key_for_date(today - timedelta(weeks=1))
+        self.prev_meal_date = (today - timedelta(weeks=1)).isoformat()
 
     def tearDown(self):
         self.db.close()
@@ -76,53 +82,111 @@ class TestStateStore(unittest.TestCase):
     # --- plan storage ---
 
     def test_record_and_retrieve_plan(self):
-        week_key = "2026-03-16"
-        plan = {"week": week_key, "dinners": ["burger-steaks"]}
-        meals = [make_meal("2026-03-20", "burger-steaks", "Hamburger Steaks")]
-        self.db.record_plan(week_key, plan, meals)
-        retrieved = self.db.get_plan(week_key)
-        self.assertEqual(retrieved["week"], week_key)
+        plan = {"week": self.week_key, "dinners": ["burger-steaks"]}
+        meals = [make_meal(self.meal_date, "burger-steaks", "Hamburger Steaks")]
+        self.db.record_plan(self.week_key, plan, meals)
+        retrieved = self.db.get_plan(self.week_key)
+        self.assertEqual(retrieved["week"], self.week_key)
 
     def test_record_plan_updates_last_planned(self):
-        week_key = "2026-03-16"
-        meals = [make_meal("2026-03-20", "burger-steaks", "Hamburger Steaks")]
-        self.db.record_plan(week_key, {}, meals)
+        meals = [make_meal(self.meal_date, "burger-steaks", "Hamburger Steaks")]
+        self.db.record_plan(self.week_key, {}, meals)
         lp = self.db.get_last_planned("burger-steaks")
-        self.assertEqual(lp, date(2026, 3, 20))
+        self.assertEqual(lp, date.fromisoformat(self.meal_date))
 
     def test_record_plan_replaces_existing_meals(self):
-        week_key = "2026-03-16"
-        meals_v1 = [make_meal("2026-03-20", "recipe-a", "Recipe A")]
-        meals_v2 = [make_meal("2026-03-20", "recipe-b", "Recipe B")]
-        self.db.record_plan(week_key, {}, meals_v1)
-        self.db.record_plan(week_key, {}, meals_v2)
+        meals_v1 = [make_meal(self.meal_date, "recipe-a", "Recipe A")]
+        meals_v2 = [make_meal(self.meal_date, "recipe-b", "Recipe B")]
+        self.db.record_plan(self.week_key, {}, meals_v1)
+        self.db.record_plan(self.week_key, {}, meals_v2)
         recent = self.db.get_recent_meals(weeks=4)
         ids = [m["recipe_id"] for m in recent]
         self.assertNotIn("recipe-a", ids)
         self.assertIn("recipe-b", ids)
 
     def test_mark_plan_approved(self):
-        week_key = "2026-03-16"
-        self.db.record_plan(week_key, {}, [])
-        self.db.mark_plan_approved(week_key)
+        self.db.record_plan(self.week_key, {}, [make_meal(self.meal_date, "r", "R")])
+        self.db.mark_plan_approved(self.week_key)
         row = self.db._conn.execute(
-            "SELECT approved FROM weekly_plans WHERE week_key = ?", (week_key,)
+            "SELECT approved FROM weekly_plans WHERE week_key = ?", (self.week_key,)
         ).fetchone()
         self.assertEqual(row["approved"], 1)
+
+    def test_get_draft_plan_returns_none_when_empty(self):
+        self.assertIsNone(self.db.get_draft_plan())
+
+    def test_get_draft_plan_returns_unapproved(self):
+        plan = {"week": self.week_key}
+        self.db.record_plan(self.week_key, plan, [make_meal(self.meal_date, "r", "R")])
+        result = self.db.get_draft_plan()
+        self.assertIsNotNone(result)
+        wk, pd = result
+        self.assertEqual(wk, self.week_key)
+        self.assertEqual(pd["week"], self.week_key)
+
+    def test_get_draft_plan_returns_none_when_all_approved(self):
+        self.db.record_plan(self.week_key, {}, [make_meal(self.meal_date, "r", "R")])
+        self.db.mark_plan_approved(self.week_key)
+        self.assertIsNone(self.db.get_draft_plan())
+
+    def test_get_draft_plan_returns_most_recent(self):
+        # Older week approved, newer week draft — should return newer
+        self.db.record_plan(self.prev_week_key, {"week": "old"}, [make_meal(self.prev_meal_date, "r", "R")])
+        self.db.mark_plan_approved(self.prev_week_key)
+        self.db.record_plan(self.week_key, {"week": "new"}, [make_meal(self.meal_date, "r2", "R2")])
+        wk, pd = self.db.get_draft_plan()
+        self.assertEqual(wk, self.week_key)
+
+    def test_get_draft_plan_multiple_drafts_returns_latest(self):
+        self.db.record_plan(self.prev_week_key, {"week": "first"}, [make_meal(self.prev_meal_date, "r", "R")])
+        self.db.record_plan(self.week_key, {"week": "second"}, [make_meal(self.meal_date, "r2", "R2")])
+        wk, _ = self.db.get_draft_plan()
+        self.assertEqual(wk, self.week_key)
+
+    def test_get_plan_status_draft(self):
+        self.db.record_plan(self.week_key, {}, [make_meal(self.meal_date, "r", "R")])
+        self.assertEqual(self.db.get_plan_status(self.week_key), "draft")
+
+    def test_get_plan_status_confirmed(self):
+        self.db.record_plan(self.week_key, {}, [make_meal(self.meal_date, "r", "R")])
+        self.db.mark_plan_approved(self.week_key)
+        self.assertEqual(self.db.get_plan_status(self.week_key), "confirmed")
+
+    def test_get_plan_status_missing(self):
+        self.assertIsNone(self.db.get_plan_status("2026-01-01"))
+
+    def test_record_plan_resets_to_draft(self):
+        # record_plan after approval should reset to draft
+        meal = make_meal(self.meal_date, "r", "R")
+        self.db.record_plan(self.week_key, {"v": 1}, [meal])
+        self.db.mark_plan_approved(self.week_key)
+        self.assertEqual(self.db.get_plan_status(self.week_key), "confirmed")
+        self.db.record_plan(self.week_key, {"v": 2}, [meal])
+        self.assertEqual(self.db.get_plan_status(self.week_key), "draft")
+
+    def test_summary_includes_draft_week(self):
+        self.db.record_plan(self.week_key, {}, [make_meal(self.meal_date, "r", "R")])
+        s = self.db.summary()
+        self.assertEqual(s["draft_week"], self.week_key)
+
+    def test_summary_draft_week_none_when_all_confirmed(self):
+        self.db.record_plan(self.week_key, {}, [make_meal(self.meal_date, "r", "R")])
+        self.db.mark_plan_approved(self.week_key)
+        s = self.db.summary()
+        self.assertIsNone(s["draft_week"])
 
     # --- no-cook days ---
 
     def test_no_cook_day_stored(self):
-        week_key = "2026-03-16"
         no_cook = {
-            "meal_date":   "2026-03-18",
+            "meal_date":   self.meal_date,
             "slot":        "dinner",
             "recipe_id":   None,
             "label":       "no cook",
             "tags":        [],
             "ingredients": [],
         }
-        self.db.record_plan(week_key, {}, [no_cook])
+        self.db.record_plan(self.week_key, {}, [no_cook])
         recent = self.db.get_recent_meals(weeks=4)
         self.assertEqual(recent[0]["label"], "no cook")
         self.assertIsNone(recent[0]["recipe_id"])
@@ -130,15 +194,14 @@ class TestStateStore(unittest.TestCase):
     # --- ingredient history ---
 
     def test_get_recent_ingredients(self):
-        week_key = "2026-03-16"
         meals = [make_meal(
-            "2026-03-20", "spiced-rice", "Spiced Rice",
+            self.meal_date, "spiced-rice", "Spiced Rice",
             ingredients=[
                 {"name": "basmati rice", "quantity": "1", "unit": "cup"},
                 {"name": "chickpeas",    "quantity": "1", "unit": "can"},
             ]
         )]
-        self.db.record_plan(week_key, {}, meals)
+        self.db.record_plan(self.week_key, {}, meals)
         ingredients = self.db.get_recent_ingredients(weeks=4)
         names = [i["name"] for i in ingredients]
         self.assertIn("basmati rice", names)

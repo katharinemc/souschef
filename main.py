@@ -18,9 +18,17 @@ Commands:
   python main.py ingest --input ./recipes_raw
       Convert Paprika .txt exports to YAML recipe files.
 
+  python main.py amend --message "<text>"
+      Apply a single freeform instruction to the current draft plan and
+      persist the result. Does not re-check Google Calendar. Can be called
+      repeatedly in separate process invocations.
+
+  python main.py confirm
+      Mark the current draft plan as confirmed.
+
   python main.py status
       Print a summary of the current database state (tracked recipes,
-      weeks stored, upcoming week key).
+      weeks stored, draft plan status, upcoming week key).
 
   python main.py preview
       Run the full plan pipeline and print the email to stdout without
@@ -132,7 +140,7 @@ def _review_last_week(store, monday: date, model: str, recipe_dir: str = "recipe
         tag_str = f"  [{', '.join(tags)}]" if tags else ""
         print(f"  {weekday:<4}  {label}{tag_str}")
 
-    print("\nAny corrections before planning this week? (press Enter to skip): ", end="", flush=True)
+    print("\nDid anything change from last week's plan? (press Enter if it went as planned): ", end="", flush=True)
     try:
         correction = input().strip()
     except (KeyboardInterrupt, EOFError):
@@ -406,6 +414,84 @@ def cmd_plan(args, cfg: dict, flat: dict):
     store.close()
 
 
+def cmd_amend(args, cfg: dict, flat: dict):
+    """Apply a single freeform instruction to the current draft plan and persist it."""
+    from state_store import StateStore
+    from reply_handler import parse_reply_intents, apply_intents, reconstruct_plan
+    from planner import load_recipes
+    from stacker import Stacker
+    from grocery_builder import GroceryBuilder
+    from output_formatter import print_plan
+
+    store = StateStore(flat.get("db_path", "meal_planner.db"))
+
+    result = store.get_draft_plan()
+    if result is None:
+        log.error("No draft plan found. Run 'python main.py plan' first.")
+        store.close()
+        sys.exit(1)
+
+    week_key, plan_dict = result
+    plan = reconstruct_plan(plan_dict)
+    log.info("Amending draft plan for week %s", week_key)
+
+    message = args.message.strip()
+    intents = parse_reply_intents(message, model=flat.get("model", "claude-sonnet-4-20250514"))
+
+    # Acknowledgment phrases ("done", "looks good") route to confirm
+    if all(i.get("type") == "acknowledgment" for i in intents):
+        store.mark_plan_approved(week_key)
+        print(f"Plan for week of {week_key} confirmed.")
+        store.close()
+        return
+
+    recipes = load_recipes(flat.get("recipe_dir", "recipes_yaml"))
+    modified_plan, change_notes = apply_intents(plan, intents, recipes, store)
+
+    removed = getattr(modified_plan, "_removed_on_hand", [])
+    stacking_notes = Stacker().analyse(modified_plan)
+    grocery = GroceryBuilder(store=store).build(modified_plan)
+
+    if removed:
+        grocery.likely_on_hand = [
+            item for item in grocery.likely_on_hand
+            if not any(r in item.name.lower() for r in removed)
+        ]
+
+    print_plan(modified_plan, grocery, stacking_notes)
+    if change_notes:
+        print("\nChanges made:")
+        for note in change_notes:
+            print(f"  • {note}")
+
+    store.record_plan(
+        modified_plan.week_key,
+        modified_plan.to_dict(),
+        modified_plan.to_state_meals(),
+    )
+    log.info("Draft updated for week %s", week_key)
+
+    store.close()
+
+
+def cmd_confirm(args, cfg: dict, flat: dict):
+    """Mark the current draft plan as confirmed."""
+    from state_store import StateStore
+
+    store = StateStore(flat.get("db_path", "meal_planner.db"))
+
+    result = store.get_draft_plan()
+    if result is None:
+        log.error("No draft plan found. Run 'python main.py plan' first.")
+        store.close()
+        sys.exit(1)
+
+    week_key, _ = result
+    store.mark_plan_approved(week_key)
+    print(f"Plan for week of {week_key} confirmed.")
+    store.close()
+
+
 def cmd_rate(args, cfg: dict, flat: dict):
     """Record a star rating for an experiment recipe."""
     import sys
@@ -578,6 +664,10 @@ def cmd_status(args, cfg: dict, flat: dict):
     print(f"  Meal rows stored:  {summary['meal_rows']}")
     if summary['oldest_meal']:
         print(f"  History range:     {summary['oldest_meal']} → {summary['newest_meal']}")
+    if summary['draft_week']:
+        print(f"  Draft plan:        week of {summary['draft_week']} (pending confirmation)")
+    else:
+        print(f"  Draft plan:        none")
     print(f"  Next plan week:    {next_monday} – {next_monday + timedelta(days=6)}")
     print(f"  Database:          {flat.get('db_path', 'meal_planner.db')}")
     print(f"  Recipe dir:        {flat.get('recipe_dir', 'recipes_yaml')}")
@@ -769,6 +859,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also promote the recipe to onRotation"
     )
     p_rate.set_defaults(func=cmd_rate)
+
+    # amend
+    p_amend = sub.add_parser(
+        "amend",
+        help="Apply a single instruction to the current draft plan and persist it",
+    )
+    p_amend.add_argument(
+        "--message", "-m", required=True,
+        help="Freeform instruction, e.g. \"swap Tuesday for pasta\"",
+    )
+    p_amend.set_defaults(func=cmd_amend)
+
+    # confirm
+    p_confirm = sub.add_parser(
+        "confirm",
+        help="Mark the current draft plan as confirmed",
+    )
+    p_confirm.set_defaults(func=cmd_confirm)
 
     # cart
     p_cart = sub.add_parser("cart", help="Fill the Walmart cart from an approved grocery list")
