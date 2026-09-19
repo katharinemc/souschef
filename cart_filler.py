@@ -392,8 +392,17 @@ class CartFiller:
             return f"Could not locate tile for index {result_index} — page may have changed."
 
         tile = tiles[result_index]
+        # Walmart's automation-id and button text have both changed over time
+        # (confirmed live 2026-09-18: current markup is
+        # data-automation-id="add-to-cart" with visible text just "Add", not
+        # "add-to-cart-btn" / "Add to cart"). Try current markup first, keep
+        # the older selectors as fallback in case Walmart A/B tests variants,
+        # plus the aria-label which has stayed stable ("Add - <product name>").
         btn  = await tile.query_selector(
-            '[data-automation-id="add-to-cart-btn"], button:has-text("Add to cart"), button:has-text("Add to Cart")'
+            '[data-automation-id="add-to-cart"], '
+            '[data-automation-id="add-to-cart-btn"], '
+            'button[aria-label^="Add - "], '
+            'button:has-text("Add to cart"), button:has-text("Add to Cart")'
         )
 
         if btn is None:
@@ -403,7 +412,12 @@ class CartFiller:
                 return f"Already in cart: {chosen['name']}"
             return f"No 'Add to cart' button found for: {chosen['name']}"
 
-        await btn.click()
+        # force=True: live-verified 2026-09-18 that a plain click times out
+        # here — Playwright's default click hovers the element first, which
+        # triggers a Walmart quick-view overlay that then intercepts the
+        # click itself. The button is genuinely the right target; force
+        # skips the hover/visibility dance and clicks it directly.
+        await btn.click(force=True)
         await page.wait_for_timeout(1500)
         return f"Added to cart: {chosen['name']}"
 

@@ -303,6 +303,48 @@ class TestCartFillerAgentLoop(unittest.IsolatedAsyncioTestCase):
         result = await filler._add_to_cart(page, 99)
         self.assertIn("no result at index", result)
 
+    async def test_add_to_cart_clicks_button_when_found(self):
+        # Regression test: live-verified 2026-09-18 that Walmart's actual
+        # markup is data-automation-id="add-to-cart" (not "add-to-cart-btn")
+        # with visible button text just "Add" — the old selector matched
+        # neither, so every add silently failed. This doesn't re-verify the
+        # exact CSS string against real HTML (this suite mocks the browser
+        # throughout), but it does pin the success path: when the tile's
+        # query_selector call finds a button, _add_to_cart must click it
+        # and report success, not silently do nothing.
+        from cart_filler import CartFiller
+        filler = self._make_filler()
+        page = self._mock_page()
+
+        await filler._search_walmart(page, "ground beef")
+
+        mock_button = AsyncMock()
+        mock_tile = AsyncMock()
+        mock_tile.query_selector = AsyncMock(return_value=mock_button)
+        page.query_selector_all = AsyncMock(return_value=[mock_tile])
+
+        result = await filler._add_to_cart(page, 0)
+
+        mock_button.click.assert_awaited_once()
+        self.assertIn("Added to cart", result)
+
+    async def test_add_to_cart_reports_already_in_cart(self):
+        from cart_filler import CartFiller
+        filler = self._make_filler()
+        page = self._mock_page()
+
+        await filler._search_walmart(page, "ground beef")
+
+        mock_tile = AsyncMock()
+        # First query_selector call (the add-to-cart lookup) finds nothing;
+        # second call (the in-cart check) finds a button.
+        mock_tile.query_selector = AsyncMock(side_effect=[None, AsyncMock()])
+        page.query_selector_all = AsyncMock(return_value=[mock_tile])
+
+        result = await filler._add_to_cart(page, 0)
+
+        self.assertIn("Already in cart", result)
+
 
 # ---------------------------------------------------------------------------
 # cmd_cart integration tests (mock CartFiller.fill)
