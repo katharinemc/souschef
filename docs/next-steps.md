@@ -197,5 +197,6 @@ Priority order based on `decisions.md` and prior dogfooding notes:
 2. **ATK recipe import** — import recipes from America's Test Kitchen into the YAML library.
 3. **Walmart cart: quantity-aware search** — the agent currently searches by name; matching requested quantities (e.g., "1.5 lb ground beef") to package sizes is unreliable.
 4. **Substitution → rotation promotion** — if you substitute a recipe three times, prompt to add it to the official rotation.
+5. **Multi-dish ("combo") meals** — the plan model is one recipe per day (`MealSlot.recipe_id`), so a meal made of a main + sides (e.g. Chicken Fried Steak + Biscuits with Sawmill Gravy + Spicy Southern Cabbage) has nowhere real to go. Worked around 2026-09-18 by baking the sides into the day's label string, which (a) doesn't pull the sides' ingredients into the grocery list and (b) isn't something `swap_day`/`amend` can produce on its own — it took a direct DB edit. If combo nights are a recurring pattern rather than a one-off, this needs a real field (e.g. `MealSlot.sides: list[str]` merged into grocery building), not another label hack.
 
 _(Removed: "Seasons support" — already implemented, see `decisions.md` 2026-05-30. "Lunch rotation" — fixed 2026-09-18, see above.)_
