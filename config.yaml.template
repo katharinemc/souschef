@@ -57,7 +57,7 @@ planner:
 # -----------------------------------------------------------------------------
 anthropic:
   # api_key: sk-ant-...              # Better: set ANTHROPIC_API_KEY env variable
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-5
 
 # -----------------------------------------------------------------------------
 # Reply handler

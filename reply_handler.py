@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {
     "db_path":          "meal_planner.db",
     "timezone":         "America/New_York",
     "poll_interval_seconds": 3600,    # 1 hour
-    "anthropic_model":  "claude-sonnet-4-20250514",
+    "anthropic_model":  "claude-sonnet-5",
 }
 
 

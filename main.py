@@ -99,9 +99,14 @@ def flatten_config(cfg: dict) -> dict:
     # Section keys override (allow email.to_address etc.)
     for section in ("email", "calendar", "planner", "anthropic", "reply_handler"):
         flat.update(cfg.get(section, {}))
-    # Ensure anthropic model is accessible as flat["model"]
+    # config.yaml's anthropic section uses the key "model" (flattened above);
+    # ReplyHandler.cfg reads "anthropic_model". Keep both keys in sync
+    # regardless of which one is actually set, so ReplyHandler doesn't
+    # silently fall back to its own hardcoded default.
     if "model" not in flat and "anthropic_model" in flat:
         flat["model"] = flat["anthropic_model"]
+    if "anthropic_model" not in flat and "model" in flat:
+        flat["anthropic_model"] = flat["model"]
     return flat
 
 
@@ -304,7 +309,7 @@ def cmd_plan(args, cfg: dict, flat: dict):
         _review_last_week(
             store,
             monday,
-            flat.get("model", "claude-sonnet-4-20250514"),
+            flat.get("model", "claude-sonnet-5"),
             flat.get("recipe_dir", "recipes_yaml"),
         )
 
@@ -365,7 +370,7 @@ def cmd_plan(args, cfg: dict, flat: dict):
             break
 
         # Parse intents
-        intents = parse_reply_intents(user_input, model=flat.get("model", "claude-sonnet-4-20250514"))
+        intents = parse_reply_intents(user_input, model=flat.get("model", "claude-sonnet-5"))
 
         if all(i.get("type") == "acknowledgment" for i in intents):
             store.mark_plan_approved(plan.week_key)
@@ -436,7 +441,7 @@ def cmd_amend(args, cfg: dict, flat: dict):
     log.info("Amending draft plan for week %s", week_key)
 
     message = args.message.strip()
-    intents = parse_reply_intents(message, model=flat.get("model", "claude-sonnet-4-20250514"))
+    intents = parse_reply_intents(message, model=flat.get("model", "claude-sonnet-5"))
 
     # Acknowledgment phrases ("done", "looks good") route to confirm
     if all(i.get("type") == "acknowledgment" for i in intents):

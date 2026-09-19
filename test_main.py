@@ -27,6 +27,36 @@ from state_store import StateStore
 from test_reply_handler import make_plan, make_recipes, WEEK_KEY
 
 
+class TestFlattenConfig(unittest.TestCase):
+    """
+    ReplyHandler reads self.cfg["anthropic_model"], but config.yaml's
+    anthropic section uses the key "model" (flattened to flat["model"]).
+    flatten_config must populate both keys from whichever one the user set,
+    or ReplyHandler silently ignores config.yaml and falls back to its own
+    hardcoded DEFAULT_CONFIG value forever.
+    """
+
+    def test_anthropic_model_key_populated_from_model_key(self):
+        cfg = {"anthropic": {"model": "claude-sonnet-5", "api_key": "x"}}
+        flat = main.flatten_config(cfg)
+        self.assertEqual(flat["model"], "claude-sonnet-5")
+        self.assertEqual(flat["anthropic_model"], "claude-sonnet-5")
+
+    def test_model_key_populated_from_anthropic_model_key(self):
+        cfg = {"anthropic_model": "claude-sonnet-5"}
+        flat = main.flatten_config(cfg)
+        self.assertEqual(flat["model"], "claude-sonnet-5")
+        self.assertEqual(flat["anthropic_model"], "claude-sonnet-5")
+
+    def test_reply_handler_picks_up_configured_model(self):
+        from reply_handler import ReplyHandler
+
+        cfg = {"anthropic": {"model": "claude-sonnet-5", "api_key": "x"}}
+        flat = main.flatten_config(cfg)
+        handler = ReplyHandler(config=flat)
+        self.assertEqual(handler.cfg["anthropic_model"], "claude-sonnet-5")
+
+
 class CmdAmendConfirmTestCase(unittest.TestCase):
     """Shared setup: a temp DB with one draft plan already recorded."""
 

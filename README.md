@@ -75,7 +75,7 @@ planner:
   db_path: meal_planner.db
 
 anthropic:
-  model: claude-sonnet-4-20250514      # or set ANTHROPIC_API_KEY env var
+  model: claude-sonnet-5      # or set ANTHROPIC_API_KEY env var
 ```
 
 ---
