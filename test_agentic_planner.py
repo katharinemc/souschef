@@ -105,6 +105,45 @@ def _full_plan_input(constraints: WeekConstraints, recipes: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tests: _build_context_message (lunch rotation surfacing)
+# ---------------------------------------------------------------------------
+
+class TestBuildContextMessageLunches(unittest.TestCase):
+    """The prompt must expose lunch rotation history, or Claude has no
+    signal to rotate lunches and will pick the same one every week."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.store = StateStore(self.tmp.name)
+        self.constraints = make_constraints()
+
+    def tearDown(self):
+        self.store.close()
+        Path(self.tmp.name).unlink(missing_ok=True)
+
+    def test_lunch_section_shows_last_planned_dates(self):
+        from agentic_planner import _build_context_message
+
+        self.store.set_lunch_last_planned("nashville-hot-salad", date(2026, 3, 10))
+        lunches = [
+            {"id": "nashville-hot-salad", "label": "Nashville hot salad"},
+            {"id": "greek-quinoa-bowl", "label": "Greek salad quinoa bowl"},
+        ]
+        msg = _build_context_message(self.constraints, {}, lunches, self.store, date(2026, 3, 23))
+
+        self.assertIn("nashville-hot-salad | Nashville hot salad | 2026-03-10", msg)
+        self.assertIn("greek-quinoa-bowl | Greek salad quinoa bowl | never", msg)
+
+    def test_lunch_section_omitted_without_store(self):
+        from agentic_planner import _build_context_message
+
+        lunches = [{"id": "grain-bowl", "label": "Grain bowl"}]
+        # Should not raise when store is None (e.g. a store-less caller).
+        msg = _build_context_message(self.constraints, {}, lunches, None, date(2026, 3, 23))
+        self.assertIn("grain-bowl | Grain bowl | never", msg)
+
+
+# ---------------------------------------------------------------------------
 # Tests: _parse_dinner_slot (constraint validation)
 # ---------------------------------------------------------------------------
 

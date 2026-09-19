@@ -476,6 +476,45 @@ class TestPlanStructure(unittest.TestCase):
         plan = plan_week(recs, wc, lunches=lunches)
         self.assertTrue(any("Cook quinoa Sunday" in n for n in plan.lunch.notes))
 
+    def test_lunch_rotation_picks_most_overdue(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        try:
+            store = StateStore(tmp.name)
+            store.set_lunch_last_planned("recent-lunch", date(2026, 3, 20))
+            store.set_lunch_last_planned("overdue-lunch", date(2026, 1, 1))
+
+            wc = make_constraints(MONDAY_NORMAL)
+            recs = {"r0": make_recipe("r0", "Recipe", ["onRotation"])}
+            lunches = [
+                {"id": "recent-lunch", "label": "Recent"},
+                {"id": "overdue-lunch", "label": "Overdue"},
+            ]
+            plan = plan_week(recs, wc, lunches=lunches, store=store)
+            self.assertEqual(plan.lunch.recipe_id, "overdue-lunch")
+            store.close()
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+
+    def test_lunch_rotation_prefers_never_planned_over_planned(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        try:
+            store = StateStore(tmp.name)
+            store.set_lunch_last_planned("planned-lunch", date(2026, 1, 1))
+            # "new-lunch" has no history at all — should still win over any
+            # lunch with a recorded date, since it's never been made.
+
+            wc = make_constraints(MONDAY_NORMAL)
+            recs = {"r0": make_recipe("r0", "Recipe", ["onRotation"])}
+            lunches = [
+                {"id": "planned-lunch", "label": "Planned"},
+                {"id": "new-lunch", "label": "New"},
+            ]
+            plan = plan_week(recs, wc, lunches=lunches, store=store)
+            self.assertEqual(plan.lunch.recipe_id, "new-lunch")
+            store.close()
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+
     def test_to_dict_serialisable(self):
         import json
         wc = make_constraints(MONDAY_NORMAL)

@@ -261,16 +261,27 @@ class StateStore:
                     json.dumps(meal.get("ingredients", [])),
                 ))
 
-            # Update last_planned for each recipe in this plan
+            # Update last_planned for each recipe/lunch in this plan
             for meal in meals:
-                if meal.get("recipe_id"):
+                recipe_id = meal.get("recipe_id")
+                if not recipe_id:
+                    continue
+                if meal.get("slot") == "lunch":
+                    self._conn.execute("""
+                        INSERT INTO lunch_history (lunch_id, last_planned)
+                        VALUES (?, ?)
+                        ON CONFLICT(lunch_id) DO UPDATE SET
+                            last_planned = excluded.last_planned
+                        WHERE excluded.last_planned > COALESCE(last_planned, '')
+                    """, (recipe_id, meal["meal_date"]))
+                else:
                     self._conn.execute("""
                         INSERT INTO recipe_history (recipe_id, last_planned)
                         VALUES (?, ?)
                         ON CONFLICT(recipe_id) DO UPDATE SET
                             last_planned = excluded.last_planned
                         WHERE excluded.last_planned > COALESCE(last_planned, '')
-                    """, (meal["recipe_id"], meal["meal_date"]))
+                    """, (recipe_id, meal["meal_date"]))
 
         self._purge_old_history()
 

@@ -152,13 +152,40 @@ Run `python main.py plan` and press Enter at the corrections prompt. The planner
 
 ## Remaining known issues
 
-None currently — as of 2026-09-18 the full suite passes (338 passed). The 7
-`test_reply_handler.py::TestAmendConfirmFlow` failures seen after the
+None currently — as of 2026-09-18 the full suite passes (349 passed).
+
+### Fixed 2026-09-18: TestAmendConfirmFlow failures
+
+The 7 `test_reply_handler.py::TestAmendConfirmFlow` failures seen after the
 2026-08-05 commit were a stale test fixture, not a product bug: `MONDAY` was
 hardcoded to `date(2026, 3, 23)`, and once real time passed that date by more
 than 4 months, `state_store.record_plan()`'s history purge deleted the
 just-inserted plan before the test could read it back. Fixed by deriving
 `MONDAY`/`WEEK_KEY` from `date.today()` instead.
+
+### Fixed 2026-09-18: lunch rotation never actually rotated
+
+The backlog below used to list "Lunch rotation" as unbuilt. It's more
+precise to say it was built but broken: both planners already select a
+lunch each week (`planner.py::_assign_lunch`, `agentic_planner.py`'s
+AVAILABLE LUNCHES prompt section), but nothing ever wrote the chosen
+lunch's date to `lunch_history` — `state_store.set_lunch_last_planned()`
+existed but was dead code. `record_plan()`'s "update last_planned" loop
+routed *every* meal, including the lunch row, into `recipe_history`
+(the dinner-rotation table), keyed on the lunch's id.
+
+Effect: `get_all_lunch_last_planned()` always returned `{}`, so the legacy
+planner's overdue-first sort was a no-op tie (stable sort → always the
+first entry in `lunches.yaml`), and the agentic planner's prompt never
+mentioned lunch history at all, giving Claude no rotation signal either.
+Every week would pick the same lunch. (Checked the live `meal_planner.db`
+— no pollution had accumulated in `recipe_history` yet, so no data
+migration was needed.)
+
+Fixed: `record_plan()` now routes `slot == "lunch"` rows to
+`lunch_history` instead of `recipe_history`; `agentic_planner.py`'s
+AVAILABLE LUNCHES section now lists each lunch's `last_planned` date and
+the system prompt instructs Claude to prefer the most overdue one.
 
 ---
 
@@ -168,8 +195,7 @@ Priority order based on `decisions.md` and prior dogfooding notes:
 
 1. **Email reply flow (Phase 3)** — handle substitution corrections via email reply, not just the CLI prompt. Note: `main.py amend`/`confirm` (shipped 2026-08-05) already cover this for CLI-driven corrections; this item is specifically about doing it via email.
 2. **ATK recipe import** — import recipes from America's Test Kitchen into the YAML library.
-3. **Lunch rotation** — `lunches.yaml` exists; nothing generates a lunch plan yet.
-4. **Walmart cart: quantity-aware search** — the agent currently searches by name; matching requested quantities (e.g., "1.5 lb ground beef") to package sizes is unreliable.
-5. **Substitution → rotation promotion** — if you substitute a recipe three times, prompt to add it to the official rotation.
+3. **Walmart cart: quantity-aware search** — the agent currently searches by name; matching requested quantities (e.g., "1.5 lb ground beef") to package sizes is unreliable.
+4. **Substitution → rotation promotion** — if you substitute a recipe three times, prompt to add it to the official rotation.
 
-_(Removed: "Seasons support" — already implemented. `agentic_planner.py`'s `_current_season`/`_recipe_in_season` filter out-of-season recipes; see `decisions.md` 2026-05-30.)_
+_(Removed: "Seasons support" — already implemented, see `decisions.md` 2026-05-30. "Lunch rotation" — fixed 2026-09-18, see above.)_

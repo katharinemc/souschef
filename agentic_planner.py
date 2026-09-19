@@ -209,9 +209,14 @@ def _build_context_message(
 
     # --- Lunches ---
     if lunches:
+        lunch_last: dict = store.get_all_lunch_last_planned() if store else {}
         lines.append("## AVAILABLE LUNCHES")
+        lines.append("id | label | last_planned")
         for entry in lunches:
-            lines.append(f"  {entry.get('id','?')} | {entry.get('label','?')}")
+            lid = entry.get("id", "?")
+            last = lunch_last.get(lid)
+            last_str = last.isoformat() if last else "never"
+            lines.append(f"  {lid} | {entry.get('label','?')} | {last_str}")
         lines.append("")
 
     lines.append("Submit the complete plan using submit_plan().")
@@ -242,6 +247,7 @@ Study it, then call submit_plan() exactly once with all 7 dinners assigned.
 - Target 3 cook nights on busy weeks (2+ no-cook weekdays), 4 on light weeks.
 - onRotation recipes should appear roughly monthly; prioritise most overdue.
 - Never repeat a recipe marked "← recent" if alternatives exist.
+- Choose the lunch_id from AVAILABLE LUNCHES with the oldest last_planned (or "never"); rotate, don't repeat the same lunch week after week.
 - Prefer variety in protein type and cuisine style across the week.
 - On high-calendar-density weeks, prefer easier recipes (shorter cook_time).
 

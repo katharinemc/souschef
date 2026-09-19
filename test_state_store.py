@@ -94,6 +94,29 @@ class TestStateStore(unittest.TestCase):
         lp = self.db.get_last_planned("burger-steaks")
         self.assertEqual(lp, date.fromisoformat(self.meal_date))
 
+    def test_record_plan_updates_lunch_history_not_recipe_history(self):
+        lunch_meal = make_meal(self.meal_date, "nashville-hot-salad", "Nashville hot salad")
+        lunch_meal["slot"] = "lunch"
+        self.db.record_plan(self.week_key, {}, [lunch_meal])
+
+        self.assertEqual(
+            self.db.get_lunch_last_planned("nashville-hot-salad"),
+            date.fromisoformat(self.meal_date),
+        )
+        # Must not leak into the dinner-rotation table.
+        self.assertIsNone(self.db.get_last_planned("nashville-hot-salad"))
+
+    def test_record_plan_keeps_dinner_and_lunch_history_separate(self):
+        dinner = make_meal(self.meal_date, "burger-steaks", "Hamburger Steaks")
+        lunch = make_meal(self.meal_date, "grain-bowl", "Grain bowl")
+        lunch["slot"] = "lunch"
+        self.db.record_plan(self.week_key, {}, [dinner, lunch])
+
+        self.assertEqual(self.db.get_last_planned("burger-steaks"), date.fromisoformat(self.meal_date))
+        self.assertIsNone(self.db.get_lunch_last_planned("burger-steaks"))
+        self.assertEqual(self.db.get_lunch_last_planned("grain-bowl"), date.fromisoformat(self.meal_date))
+        self.assertIsNone(self.db.get_last_planned("grain-bowl"))
+
     def test_record_plan_replaces_existing_meals(self):
         meals_v1 = [make_meal(self.meal_date, "recipe-a", "Recipe A")]
         meals_v2 = [make_meal(self.meal_date, "recipe-b", "Recipe B")]
