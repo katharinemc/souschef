@@ -35,7 +35,10 @@ from calendar_reader import DayConstraints
 # Fixtures
 # ---------------------------------------------------------------------------
 
-MONDAY    = date(2026, 3, 23)
+# Use a dynamic Monday so plans written via record_plan() aren't purged by
+# the 4-month history cutoff in state_store._purge_old_history() (which
+# happened when this was a fixed date and real time passed it by).
+MONDAY    = date.today() - timedelta(days=date.today().weekday())
 TUESDAY   = MONDAY + timedelta(days=1)
 WEDNESDAY = MONDAY + timedelta(days=2)
 THURSDAY  = MONDAY + timedelta(days=3)
@@ -43,7 +46,7 @@ FRIDAY    = MONDAY + timedelta(days=4)
 SATURDAY  = MONDAY + timedelta(days=5)
 SUNDAY    = MONDAY + timedelta(days=6)
 
-WEEK_KEY  = "2026-03-23"
+WEEK_KEY  = MONDAY.isoformat()
 
 
 def make_recipe(rid, name, tags=None):

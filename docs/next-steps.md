@@ -152,7 +152,13 @@ Run `python main.py plan` and press Enter at the corrections prompt. The planner
 
 ## Remaining known issues
 
-- `test_state_store.py` has 5 pre-existing test failures unrelated to this work. These were failing before this branch and are not regressions.
+None currently — as of 2026-09-18 the full suite passes (338 passed). The 7
+`test_reply_handler.py::TestAmendConfirmFlow` failures seen after the
+2026-08-05 commit were a stale test fixture, not a product bug: `MONDAY` was
+hardcoded to `date(2026, 3, 23)`, and once real time passed that date by more
+than 4 months, `state_store.record_plan()`'s history purge deleted the
+just-inserted plan before the test could read it back. Fixed by deriving
+`MONDAY`/`WEEK_KEY` from `date.today()` instead.
 
 ---
 
