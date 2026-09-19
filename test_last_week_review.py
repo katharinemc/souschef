@@ -58,6 +58,7 @@ def _mock_claude(payload: dict) -> MagicMock:
     client = MagicMock()
     content = MagicMock()
     content.text = json.dumps(payload)
+    content.type = "text"
     client.messages.create.return_value.content = [content]
     return client
 

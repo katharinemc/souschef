@@ -205,7 +205,7 @@ def parse_reply_intents(reply_body: str, model: str, api_key: Optional[str] = No
             system=INTENT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": reply_body}],
         )
-        raw = response.content[0].text.strip()
+        raw = next(b.text for b in response.content if b.type == "text").strip()
 
         # Strip any accidental markdown fences
         raw = raw.replace("```json", "").replace("```", "").strip()
@@ -280,8 +280,15 @@ def apply_intents(
                 tag_pool = [r for r in pool if constraint in (r.get("tags") or [])]
                 name_pool = [r for r in pool if constraint in r.get("name", "").lower()]
                 constrained = tag_pool or name_pool
-                if constrained:
-                    pool = constrained
+                if not constrained:
+                    # Fail loudly rather than silently swapping in an
+                    # unrelated recipe — the day is left unchanged.
+                    notes.append(
+                        f"Couldn't find a recipe matching '{constraint}' for "
+                        f"{day_name} — {day_name} left unchanged."
+                    )
+                    continue
+                pool = constrained
 
             if not pool:
                 # Relax: allow re-use

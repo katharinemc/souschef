@@ -210,7 +210,7 @@ def _review_last_week(store, monday: date, model: str, recipe_dir: str = "recipe
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.content[0].text.strip()
+        raw = next(b.text for b in resp.content if b.type == "text").strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1].lstrip("json").strip()
         parsed = _json.loads(raw)

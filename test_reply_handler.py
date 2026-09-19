@@ -119,6 +119,7 @@ class TestIntentParsing(unittest.TestCase):
         """Build a mock Anthropic API response."""
         mock_content = MagicMock()
         mock_content.text = json_str
+        mock_content.type = "text"
         mock_response = MagicMock()
         mock_response.content = [mock_content]
         return mock_response
@@ -174,6 +175,20 @@ class TestIntentParsing(unittest.TestCase):
         self.assertIsNone(intent_parse_error([{"type": "acknowledgment"}]))
         self.assertEqual(intent_parse_error(intents), intents[0]["error"])
 
+    def test_thinking_block_before_text_block_is_skipped(self):
+        # claude-sonnet-5 (and other adaptive-thinking models) can return a
+        # leading `thinking` content block before the `text` block. Indexing
+        # content[0] blindly broke on this — must scan for type == "text".
+        with patch("reply_handler.anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_anthropic.Anthropic.return_value = mock_client
+            thinking_block = MagicMock(type="thinking")
+            del thinking_block.text  # ThinkingBlock has no .text attribute
+            text_block = MagicMock(type="text", text='[{"type": "acknowledgment"}]')
+            mock_client.messages.create.return_value.content = [thinking_block, text_block]
+            intents = parse_reply_intents("okay", "claude-test")
+        self.assertEqual(intents[0]["type"], "acknowledgment")
+
     def test_markdown_fences_stripped(self):
         with patch("reply_handler.anthropic") as mock_anthropic:
             mock_client = MagicMock()
@@ -209,6 +224,24 @@ class TestApplyIntents(unittest.TestCase):
         modified, notes = apply_intents(plan, intents, recipes, store=None)
         monday_slot = modified.get_dinner(MONDAY)
         self.assertIn("taco", (monday_slot.tags or []))
+
+    def test_swap_day_unmatched_constraint_fails_loudly(self):
+        # If the constraint matches nothing in the library, the day must be
+        # left unchanged and the failure surfaced — not silently swapped
+        # for an unrelated recipe.
+        plan = make_plan()
+        recipes = make_recipes()
+        original_recipe_id = plan.get_dinner(MONDAY).recipe_id
+        intents = [{
+            "type": "swap_day", "day": "Monday",
+            "constraint": "chicken fried steak with sawmill gravy",
+        }]
+        modified, notes = apply_intents(plan, intents, recipes, store=None)
+        monday_slot = modified.get_dinner(MONDAY)
+        self.assertEqual(monday_slot.recipe_id, original_recipe_id)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("chicken fried steak with sawmill gravy", notes[0])
+        self.assertIn("left unchanged", notes[0])
 
     def test_swap_meatless_day_stays_meatless(self):
         plan = make_plan()
@@ -434,7 +467,7 @@ class TestNewIntentParsing(unittest.TestCase):
         mock_client = MagicMock()
         mock_anthropic.Anthropic.return_value = mock_client
         mock_client.messages.create.return_value.content = [
-            MagicMock(text='[{"type": "rate_experiment", "day": "Saturday", "stars": 4}]')
+            MagicMock(text='[{"type": "rate_experiment", "day": "Saturday", "stars": 4}]', type="text")
         ]
         intents = parse_reply_intents("Rate Saturday's experiment 4 stars", model="test-model")
         self.assertEqual(intents[0]["type"], "rate_experiment")
@@ -445,7 +478,7 @@ class TestNewIntentParsing(unittest.TestCase):
         mock_client = MagicMock()
         mock_anthropic.Anthropic.return_value = mock_client
         mock_client.messages.create.return_value.content = [
-            MagicMock(text='[{"type": "promote_experiment", "recipe_id": "merguez"}]')
+            MagicMock(text='[{"type": "promote_experiment", "recipe_id": "merguez"}]', type="text")
         ]
         intents = parse_reply_intents("Add the merguez to onRotation", model="test-model")
         self.assertEqual(intents[0]["type"], "promote_experiment")
@@ -455,7 +488,7 @@ class TestNewIntentParsing(unittest.TestCase):
         mock_client = MagicMock()
         mock_anthropic.Anthropic.return_value = mock_client
         mock_client.messages.create.return_value.content = [
-            MagicMock(text='[{"type": "assign_note_out", "day": "Tuesday", "note_text": "Dinner at Sarah\'s"}]')
+            MagicMock(text='[{"type": "assign_note_out", "day": "Tuesday", "note_text": "Dinner at Sarah\'s"}]', type="text")
         ]
         intents = parse_reply_intents("Mark Tuesday as dinner at Sarah's", model="test-model")
         self.assertEqual(intents[0]["type"], "assign_note_out")
@@ -466,7 +499,7 @@ class TestNewIntentParsing(unittest.TestCase):
         mock_client = MagicMock()
         mock_anthropic.Anthropic.return_value = mock_client
         mock_client.messages.create.return_value.content = [
-            MagicMock(text='[{"type": "assign_note_cook", "day": "Sunday", "note_text": "Waffles for dinner"}]')
+            MagicMock(text='[{"type": "assign_note_cook", "day": "Sunday", "note_text": "Waffles for dinner"}]', type="text")
         ]
         intents = parse_reply_intents("Put waffles on Sunday", model="test-model")
         self.assertEqual(intents[0]["type"], "assign_note_cook")
