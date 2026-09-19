@@ -152,6 +152,27 @@ class TestCmdAmend(CmdAmendConfirmTestCase):
         finally:
             store.close()
 
+    @patch("reply_handler.apply_intents")
+    @patch("reply_handler.parse_reply_intents")
+    def test_amend_parse_failure_does_not_confirm(self, mock_parse, mock_apply):
+        # A parse failure (e.g. the model 404'd) must not be treated as the
+        # user approving the plan — that silently discards their message.
+        mock_parse.return_value = [{"type": "parse_failed", "error": "model 404"}]
+
+        args = SimpleNamespace(message="swap Tuesday for pasta")
+        with self.assertRaises(SystemExit) as ctx:
+            main.cmd_amend(args, {}, self.flat)
+        self.assertEqual(ctx.exception.code, 1)
+
+        mock_apply.assert_not_called()
+        store = self._reopen_store()
+        try:
+            self.assertFalse(store.is_plan_approved(WEEK_KEY))
+            week_key, _ = store.get_draft_plan()
+            self.assertEqual(week_key, WEEK_KEY)
+        finally:
+            store.close()
+
 
 class TestCmdConfirm(CmdAmendConfirmTestCase):
 

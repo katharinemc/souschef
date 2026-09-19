@@ -23,6 +23,7 @@ from reply_handler import (
     parse_reply_intents,
     apply_intents,
     reconstruct_plan,
+    intent_parse_error,
     _dummy_dc,
     _patch_planner_exports,
 )
@@ -158,7 +159,9 @@ class TestIntentParsing(unittest.TestCase):
             )
         self.assertEqual(len(intents), 2)
 
-    def test_malformed_json_falls_back_to_ack(self):
+    def test_malformed_json_returns_parse_failed_not_acknowledgment(self):
+        # A parse failure must NOT look like the user saying "looks good" —
+        # otherwise a transient error silently approves the plan unchanged.
         with patch("reply_handler.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_anthropic.Anthropic.return_value = mock_client
@@ -166,7 +169,10 @@ class TestIntentParsing(unittest.TestCase):
                 "not valid json at all"
             )
             intents = parse_reply_intents("anything", "claude-test")
-        self.assertEqual(intents[0]["type"], "acknowledgment")
+        self.assertEqual(intents[0]["type"], "parse_failed")
+        self.assertIn("error", intents[0])
+        self.assertIsNone(intent_parse_error([{"type": "acknowledgment"}]))
+        self.assertEqual(intent_parse_error(intents), intents[0]["error"])
 
     def test_markdown_fences_stripped(self):
         with patch("reply_handler.anthropic") as mock_anthropic:
@@ -369,6 +375,41 @@ class TestReplyHandlerAck(unittest.TestCase):
         # send_plan should NOT have been called
         mock_sender.send_plan.assert_not_called()
         self.assertTrue(result)
+
+    def test_parse_failure_does_not_approve_and_sends_note(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as f:
+            store = StateStore(f.name)
+            plan = make_plan()
+            store.record_plan(WEEK_KEY, plan.to_dict(), plan.to_state_meals())
+            store.close()
+
+            handler = ReplyHandler(
+                config={"db_path": f.name, "to_address": "test@example.com"},
+                dry_run=True,
+            )
+
+            mock_sender = MagicMock()
+            mock_sender.is_acknowledgment.return_value = False
+
+            with patch(
+                "reply_handler.parse_reply_intents",
+                return_value=[{"type": "parse_failed", "error": "boom"}],
+            ):
+                result = handler._handle_reply(
+                    {"body": "swap Tuesday for pasta"},
+                    WEEK_KEY,
+                    mock_sender,
+                )
+
+            self.assertFalse(result)
+            mock_sender.send_plan.assert_not_called()
+            mock_sender.send_note.assert_called_once()
+            _, kwargs = mock_sender.send_note.call_args
+            self.assertIn("couldn't process", kwargs["subject"].lower())
+
+            store2 = StateStore(f.name)
+            self.assertFalse(store2.is_plan_approved(WEEK_KEY))
+            store2.close()
 
 
 # ---------------------------------------------------------------------------

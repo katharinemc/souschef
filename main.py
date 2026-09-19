@@ -348,7 +348,7 @@ def cmd_plan(args, cfg: dict, flat: dict):
 
     # --- Phase 1 interactive reply loop ---
     from email_sender import EmailSender
-    from reply_handler import parse_reply_intents, apply_intents
+    from reply_handler import parse_reply_intents, apply_intents, intent_parse_error
     from output_formatter import print_plan
 
     sender = EmailSender(config=flat)
@@ -371,6 +371,12 @@ def cmd_plan(args, cfg: dict, flat: dict):
 
         # Parse intents
         intents = parse_reply_intents(user_input, model=flat.get("model", "claude-sonnet-5"))
+
+        error = intent_parse_error(intents)
+        if error:
+            print(f"  Sorry, couldn't process that — nothing was changed. ({error})")
+            print("  Try rephrasing, or type 'done' to approve as-is.")
+            continue
 
         if all(i.get("type") == "acknowledgment" for i in intents):
             store.mark_plan_approved(plan.week_key)
@@ -422,7 +428,7 @@ def cmd_plan(args, cfg: dict, flat: dict):
 def cmd_amend(args, cfg: dict, flat: dict):
     """Apply a single freeform instruction to the current draft plan and persist it."""
     from state_store import StateStore
-    from reply_handler import parse_reply_intents, apply_intents, reconstruct_plan
+    from reply_handler import parse_reply_intents, apply_intents, reconstruct_plan, intent_parse_error
     from planner import load_recipes
     from stacker import Stacker
     from grocery_builder import GroceryBuilder
@@ -442,6 +448,13 @@ def cmd_amend(args, cfg: dict, flat: dict):
 
     message = args.message.strip()
     intents = parse_reply_intents(message, model=flat.get("model", "claude-sonnet-5"))
+
+    error = intent_parse_error(intents)
+    if error:
+        log.error("Could not process amend message: %s", error)
+        print(f"Sorry, couldn't process that message — nothing was changed. ({error})")
+        store.close()
+        sys.exit(1)
 
     # Acknowledgment phrases ("done", "looks good") route to confirm
     if all(i.get("type") == "acknowledgment" for i in intents):

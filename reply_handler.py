@@ -167,6 +167,19 @@ def read_stdin_reply() -> Optional[str]:
     return text
 
 
+def intent_parse_error(intents: list[dict]) -> Optional[str]:
+    """
+    If parse_reply_intents() failed, return its error message; else None.
+
+    Callers must check this before treating intents as a confirmed
+    no-op — a parse failure is not the same thing as the user saying
+    "looks good", and must not be treated as approval.
+    """
+    if len(intents) == 1 and intents[0].get("type") == "parse_failed":
+        return intents[0].get("error", "unknown error")
+    return None
+
+
 def parse_reply_intents(reply_body: str, model: str, api_key: Optional[str] = None) -> list[dict]:
     """
     Send the reply body to Claude and extract structured intents.
@@ -174,7 +187,11 @@ def parse_reply_intents(reply_body: str, model: str, api_key: Optional[str] = No
     Returns a list of action dicts, e.g.:
       [{"type": "swap_day", "day": "Tuesday", "constraint": "pasta"}]
 
-    Falls back to [{"type": "acknowledgment"}] on any error.
+    On any error, returns [{"type": "parse_failed", "error": "<message>"}]
+    instead of raising. This is NOT an acknowledgment — callers must check
+    for it before treating the result as a confirmed no-op, or a real
+    failure (e.g. a retired model ID) gets silently treated as the user
+    saying "looks good" and the plan is approved unchanged.
     """
     if anthropic is None:
         raise RuntimeError("anthropic package not installed. Run: pip install anthropic")
@@ -200,8 +217,8 @@ def parse_reply_intents(reply_body: str, model: str, api_key: Optional[str] = No
         return intents
 
     except (json.JSONDecodeError, Exception) as e:
-        log.error("Intent parsing failed: %s — falling back to acknowledgment", e)
-        return [{"type": "acknowledgment"}]
+        log.error("Intent parsing failed: %s", e)
+        return [{"type": "parse_failed", "error": str(e)}]
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +678,21 @@ class ReplyHandler:
             body,
             model=self.cfg["anthropic_model"],
         )
+
+        error = intent_parse_error(intents)
+        if error:
+            log.error("Could not process reply for week %s: %s", week_key, error)
+            week_label = self._make_week_label(date.fromisoformat(week_key))
+            sender.send_note(
+                subject=f"Re: Meal Plan {week_label} — couldn't process your reply",
+                body=(
+                    "I couldn't understand your last message, so nothing was "
+                    f"changed — the plan for {week_label} is still as sent.\n\n"
+                    "Reply again with your change, or just say \"looks good\" "
+                    "to approve as-is."
+                ),
+            )
+            return False
 
         # Check if all intents are acknowledgments
         if all(i.get("type") == "acknowledgment" for i in intents):

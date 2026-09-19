@@ -440,6 +440,34 @@ class EmailSender:
         result  = self._send_raw(message)
         return result.get("id")
 
+    def send_note(self, subject: str, body: str) -> Optional[str]:
+        """
+        Send a short plain-text notification (e.g. "couldn't process your
+        reply"). Same to_address/dry_run handling as send_plan, without the
+        meal-plan formatting.
+
+        Returns the Gmail message ID on success, or None in dry-run mode.
+        """
+        to = self.cfg.get("to_address")
+        if not to:
+            raise ValueError(
+                "to_address not set in config. "
+                "Add 'to_address: your@email.com' to config.yaml under 'email'."
+            )
+
+        if self.dry_run:
+            print("=" * 60)
+            print(f"TO:      {to}")
+            print(f"SUBJECT: {subject}")
+            print("=" * 60)
+            print(body)
+            print("=" * 60)
+            return None
+
+        message = self._build_message(to, subject, body)
+        result  = self._send_raw(message)
+        return result.get("id")
+
     # -----------------------------------------------------------------------
     # Thread / reply management
     # -----------------------------------------------------------------------
