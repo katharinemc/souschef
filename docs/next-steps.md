@@ -166,9 +166,10 @@ just-inserted plan before the test could read it back. Fixed by deriving
 
 Priority order based on `decisions.md` and prior dogfooding notes:
 
-1. **Seasons support** — recipes tagged `summer`/`winter` should be filtered by current season. Scaffold exists in YAML; planner doesn't filter yet.
-2. **Email reply flow (Phase 3)** — handle substitution corrections via email reply, not just the CLI prompt.
-3. **ATK recipe import** — import recipes from America's Test Kitchen into the YAML library.
-4. **Lunch rotation** — `lunches.yaml` exists; nothing generates a lunch plan yet.
-5. **Walmart cart: quantity-aware search** — the agent currently searches by name; matching requested quantities (e.g., "1.5 lb ground beef") to package sizes is unreliable.
-6. **Substitution → rotation promotion** — if you substitute a recipe three times, prompt to add it to the official rotation.
+1. **Email reply flow (Phase 3)** — handle substitution corrections via email reply, not just the CLI prompt. Note: `main.py amend`/`confirm` (shipped 2026-08-05) already cover this for CLI-driven corrections; this item is specifically about doing it via email.
+2. **ATK recipe import** — import recipes from America's Test Kitchen into the YAML library.
+3. **Lunch rotation** — `lunches.yaml` exists; nothing generates a lunch plan yet.
+4. **Walmart cart: quantity-aware search** — the agent currently searches by name; matching requested quantities (e.g., "1.5 lb ground beef") to package sizes is unreliable.
+5. **Substitution → rotation promotion** — if you substitute a recipe three times, prompt to add it to the official rotation.
+
+_(Removed: "Seasons support" — already implemented. `agentic_planner.py`'s `_current_season`/`_recipe_in_season` filter out-of-season recipes; see `decisions.md` 2026-05-30.)_

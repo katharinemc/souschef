@@ -134,6 +134,27 @@ Supported actions:
 | `Add [recipe] to rotation` | Promotes an experiment recipe to `onRotation` |
 | `done` / `looks good` / `okay thanks` | Approves the plan and exits |
 
+### Amending a plan across separate invocations
+
+The reply loop above runs inline during `python main.py plan`. If you need to
+make a correction later — a separate terminal session, or after the process
+has already exited — use `amend` and `confirm` instead. They operate on
+whatever plan is currently in draft state (i.e. the most recent unapproved
+plan), so each call can be a fresh process:
+
+```bash
+python main.py amend --message "swap Tuesday for pasta"
+python main.py amend --message "mark Saturday as dinner at Sarah's"
+python main.py confirm
+```
+
+`amend` accepts the same freeform instructions as the reply loop and
+persists the change immediately, so the next `amend` builds on the previous
+one. If the message is just an acknowledgment ("done", "looks good"), `amend`
+confirms the plan instead of trying to parse it as a change. `confirm` marks
+the current draft approved without making any changes. Both exit with an
+error if there's no draft plan (run `python main.py plan` first).
+
 ---
 
 ## Household rules the planner follows
@@ -245,6 +266,15 @@ python main.py reply
 ```
 
 Polls the configured inbox for replies to a sent plan and triggers re-plans. Used in Phase 3 (email delivery, not yet enabled).
+
+### Amend or confirm a draft plan
+
+```bash
+python main.py amend --message "swap Tuesday for pasta"
+python main.py confirm
+```
+
+See "Amending a plan across separate invocations" above.
 
 ---
 
