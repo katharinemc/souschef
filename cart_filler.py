@@ -282,7 +282,13 @@ class CartFiller:
         for iteration in range(self.max_iterations):
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                # Live-verified 2026-09-18: claude-sonnet-5 runs adaptive
+                # thinking by default, and thinking tokens count against
+                # max_tokens. 4096 was fine for the old model (no default
+                # thinking) but now truncates mid-thought before any
+                # tool_use block is emitted (stop_reason="max_tokens",
+                # empty content) — the agent silently stalls forever.
+                max_tokens=16000,
                 system=CART_SYSTEM_PROMPT,
                 tools=WALMART_TOOLS,
                 tool_choice={"type": "auto"},
@@ -292,7 +298,11 @@ class CartFiller:
 
             tool_calls = [b for b in response.content if b.type == "tool_use"]
             if not tool_calls:
-                log.warning("Agent produced no tool calls at iteration %d.", iteration)
+                text = next((b.text for b in response.content if b.type == "text"), "")
+                log.warning(
+                    "Agent produced no tool calls at iteration %d (stop_reason=%s): %s",
+                    iteration, response.stop_reason, text[:1000],
+                )
                 break
 
             tool_results = []
