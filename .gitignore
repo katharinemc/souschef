@@ -2,6 +2,9 @@ token.json
 credentials.json
 config.yaml
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 __pycache__/
 *.pyc
 .env

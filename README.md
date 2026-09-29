@@ -372,6 +372,8 @@ Add these to `.gitignore` if not already there:
 credentials.json
 token.json
 meal_planner.db
+meal_planner.db-shm
+meal_planner.db-wal
 config.yaml
 ```
 
