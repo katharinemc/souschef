@@ -107,6 +107,30 @@ Tests: 366 passed, 16 subtests. The one remaining SyntaxWarning (line 1 of
 
 ---
 
+## Parked: commit `meal_planner.db` to use souschef from two Macs
+
+The user wants to commit the database so they can work from either of their two
+Macs. It's parked until they **make the GitHub repo private**. It's public now,
+and the DB will build up the household schedule (plan rationales name
+calendar events, and notes say who's out which night). The item is on their to-do list in the
+Souschef Dogfooding Plan doc. Until then: use one Mac, or copy the `.db` by hand.
+
+When they give the go-ahead:
+- `state_store.py` runs SQLite in WAL mode, so recent writes sit in
+  `meal_planner.db-wal` (git-ignored since `ed2fd44` "stop tracking SQLite
+  -shm/-wal"). Make `StateStore.close()` run
+  `PRAGMA wal_checkpoint(TRUNCATE)` so the committed `.db` has everything.
+  Check that every command path actually calls `close()`.
+- Remove `*.db` / `meal_planner.db` from `.gitignore` and the README's
+  "Files not to commit" list. Keep the `-shm`/`-wal` patterns.
+- Git can't merge a binary DB. Document the routine in the README:
+  `git pull` before planning, commit and push after.
+- The `chrome-debug` alias lives in `~/.zshrc`, one per machine. Suggested:
+  move it into a versioned `scripts/chrome-debug.sh` (both machines are
+  Macs) that also checks whether port 9222 is already up.
+
+---
+
 ## Cleanup chores (unchanged from last session)
 
 - ~~`~/.zshrc`'s `chrome-debug` alias~~: fixed 2026-09-28. It now launches
