@@ -112,9 +112,10 @@ Tests: 366 passed, 16 subtests. The one remaining SyntaxWarning (line 1 of
 - ~~`~/.zshrc`'s `chrome-debug` alias~~: fixed 2026-09-28. It now launches
   the dedicated debug profile in the background, so `chrome-debug` is the
   way to start Chrome for the cart filler.
-- ~~README Chrome setup / `walmart-cart-next-steps.md`~~: fixed
-  2026-09-28. Both now use the dedicated-profile command, and the README
-  documents the human-check prompt and `walmart.human_check_timeout_s`.
+- ~~README Chrome setup~~: fixed 2026-09-28. It now uses the
+  dedicated-profile command and documents the human-check prompt and
+  `walmart.human_check_timeout_s`. `docs/walmart-cart-next-steps.md` was
+  deleted (implemented design plan; it's in git history).
 - Backlog in `docs/next-steps.md`: re-evaluate "Walmart quantity-aware
   search". Prices now reach the agent, but it still picks one package per
   line with no reasoning about quantity.

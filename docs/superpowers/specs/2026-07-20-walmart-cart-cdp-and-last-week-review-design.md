@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-20  
 **Status:** Approved  
-**PRD reference:** `prd_v1_5.md` §9 (Walmart cart), `docs/walmart-cart-next-steps.md`
+**PRD reference:** `prd_v1_5.md` §9 (Walmart cart), `docs/walmart-cart-next-steps.md` (deleted 2026-09-28 once implemented; see git history)
 
 ---
 

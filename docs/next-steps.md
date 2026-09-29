@@ -1,63 +1,26 @@
 # Next Steps
 
-_Last updated: 2026-07-20_
+_Last updated: 2026-09-28_
 
 ---
 
-## What just shipped (branch `main`, commits `0e0464b`–`494fcee`)
+## Status
 
-Two features:
-
-1. **Walmart cart CDP fix** — the cart filler now connects to your real running Chrome instead of launching Playwright's bundled Chromium. Walmart's bot detection was flagging the Playwright browser; your real Chrome with its existing session is undetectable.
-
-2. **Last-week review substitutions** — during pre-planning you can now say what you _actually_ cooked when the plan changed. The planner clears the skipped recipe from recency history and records the substitution so rotation timing stays accurate.
+- **Walmart cart filling works end to end** (first full live run 2026-09-28).
+  Setup and the "Robot or human?" prompt are in the README's "Walmart cart
+  filling" section. The fixes and the one unverified piece are in
+  `docs/RESUME.md`.
+- **Last-week review substitutions** (shipped 2026-07-20) have **not** been
+  manually verified yet. The steps below are out of date: the seed and check
+  scripts use `souschef.db` and a `tracked_recipes` table, but the real
+  database is `meal_planner.db` and the table is `recipe_history`. Fix the
+  scripts before running them.
 
 ---
 
 ## Manual verification
 
-### Feature 1: Walmart cart filling via CDP
-
-**Prerequisites**
-
-- `walmart.enabled: true` in `config.yaml` (already set)
-- The `chrome-debug` alias is in `~/.zshrc` (see README §"Walmart cart filling")
-- You are logged into Walmart in that Chrome session
-
-**Steps**
-
-1. Quit any running Chrome instance completely (`⌘Q`).
-2. Open a new terminal and run:
-   ```bash
-   chrome-debug
-   ```
-   Chrome opens. Navigate to walmart.com and confirm you're logged in.
-
-3. In the souschef directory, run a plan to generate a grocery list (or skip to step 4 if one already exists):
-   ```bash
-   python main.py plan
-   ```
-
-4. Run the cart filler:
-   ```bash
-   python main.py cart
-   ```
-
-**Expected output**
-```
-Connecting to Chrome at http://localhost:9222 ...
-(If this fails, start Chrome with: chrome-debug — see README for setup.)
-```
-Followed by the agent working through the grocery list and a summary of added/skipped/not-found items.
-
-**Failure modes to check**
-- If you see "Could not connect to Chrome at http://localhost:9222" → Chrome wasn't started with `chrome-debug`. Quit Chrome and rerun `chrome-debug`.
-- If you see "Not logged into Walmart" → log into Walmart in the Chrome window that opened, then rerun `python main.py cart`.
-- No CAPTCHA or "robot or human?" page should appear.
-
----
-
-### Feature 2: Last-week review substitutions
+### Last-week review substitutions
 
 This runs automatically at the start of `python main.py plan` when a plan for the previous week exists.
 
@@ -152,7 +115,14 @@ Run `python main.py plan` and press Enter at the corrections prompt. The planner
 
 ## Remaining known issues
 
-None currently — as of 2026-09-18 the full suite passes (349 passed).
+As of 2026-09-28 the full suite passes (366 passed).
+
+- **Walmart: possible double-adds on rerun.** Search tiles don't always
+  show that an item is already in the cart, so running the cart fill twice
+  may add duplicates. See the open item in `docs/RESUME.md` for how to check on the next run.
+- **Stale docs:** README's Database table lists `tracked_recipes`, which
+  doesn't exist (the real tables are `recipe_history`, `lunch_history`,
+  `weekly_plans`, `planned_meals`, `meal_notes`, `experiment_ratings`).
 
 ### Fixed 2026-09-18: TestAmendConfirmFlow failures
 
@@ -195,7 +165,7 @@ Priority order based on `decisions.md` and prior dogfooding notes:
 
 1. **Email reply flow (Phase 3)** — handle substitution corrections via email reply, not just the CLI prompt. Note: `main.py amend`/`confirm` (shipped 2026-08-05) already cover this for CLI-driven corrections; this item is specifically about doing it via email.
 2. **ATK recipe import** — import recipes from America's Test Kitchen into the YAML library.
-3. **Walmart cart: quantity-aware search** — the agent currently searches by name; matching requested quantities (e.g., "1.5 lb ground beef") to package sizes is unreliable.
+3. **Walmart cart: quantity-aware search** — the agent picks one package per list line and doesn't reason about amounts (e.g., "1.5 lb ground beef" vs. package sizes). Real prices now reach the agent (fixed 2026-09-28), which should help here. Two related findings from the 2026-09-28 run: it reasonably bought one gallon of milk to cover two milk lines, and the grocery list has near-duplicate lines (two chicken-breast entries from different recipes) that the grocery builder could merge before the cart step.
 4. **Substitution → rotation promotion** — if you substitute a recipe three times, prompt to add it to the official rotation.
 5. **Multi-dish ("combo") meals** — the plan model is one recipe per day (`MealSlot.recipe_id`), so a meal made of a main + sides (e.g. Chicken Fried Steak + Biscuits with Sawmill Gravy + Spicy Southern Cabbage) has nowhere real to go. Worked around 2026-09-18 by baking the sides into the day's label string, which (a) doesn't pull the sides' ingredients into the grocery list and (b) isn't something `swap_day`/`amend` can produce on its own — it took a direct DB edit. If combo nights are a recurring pattern rather than a one-off, this needs a real field (e.g. `MealSlot.sides: list[str]` merged into grocery building), not another label hack.
 
