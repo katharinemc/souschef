@@ -107,6 +107,27 @@ Tests: 366 passed, 16 subtests. The one remaining SyntaxWarning (line 1 of
 
 ---
 
+## Email (Phase 3): `plan --email` built, first real send pending
+
+`d57674f` connects `plan --email` to `EmailSender.send_plan`. It saves the
+draft, emails it, skips the terminal loop, and exits 1 but keeps the draft if
+the send fails. It also fixes Gmail auth: the token was loaded with an
+`ALL_SCOPES` override, so `has_scopes()` always passed. Live dry run is OK.
+**Not yet done:** a real send. The user has to turn on the Gmail API and approve
+access in the browser (Run 3 in the Souschef Dogfooding Plan doc).
+
+Known gaps, next in line:
+- `reply --once` doesn't record which reply it handled. Running it twice
+  re-applies the latest reply (a second swap). Store the handled Gmail
+  message id per week and skip it next time.
+- `reply` without `--once` exits immediately unless it's Thursday. Revisit
+  that when scheduling is designed.
+- The grocery builder lets recipe section headings through as ingredients
+  ("For the Pork:", "For the Pineapple Salsa:"), plus "water". These also feed
+  the Walmart cart as searches. Seen in the 2026-09-28 dry run.
+
+---
+
 ## Parked: commit `meal_planner.db` to use souschef from two Macs
 
 The user wants to commit the database so they can work from either of their two
