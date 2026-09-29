@@ -120,9 +120,6 @@ As of 2026-09-28 the full suite passes (366 passed).
 - **Walmart: possible double-adds on rerun.** Search tiles don't always
   show that an item is already in the cart, so running the cart fill twice
   may add duplicates. See the open item in `docs/RESUME.md` for how to check on the next run.
-- **Stale docs:** README's Database table lists `tracked_recipes`, which
-  doesn't exist (the real tables are `recipe_history`, `lunch_history`,
-  `weekly_plans`, `planned_meals`, `meal_notes`, `experiment_ratings`).
 
 ### Fixed 2026-09-18: TestAmendConfirmFlow failures
 

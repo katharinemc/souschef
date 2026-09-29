@@ -353,8 +353,10 @@ Plans and rotation history are stored in `meal_planner.db` (SQLite). The databas
 
 | Table | Contents |
 |-------|----------|
-| `planned_meals` | Every assigned dinner slot, by week |
-| `tracked_recipes` | `last_planned` date for each recipe ID |
+| `weekly_plans` | One row per week: the full plan as JSON, plus whether it's approved |
+| `planned_meals` | Every assigned dinner and lunch slot, by week |
+| `recipe_history` | `last_planned` date for each dinner recipe ID (drives rotation) |
+| `lunch_history` | `last_planned` date for each lunch ID (drives lunch rotation) |
 | `experiment_ratings` | Star ratings recorded via `rate` command or reply loop |
 | `meal_notes` | Out and cook notes assigned during the reply loop |
 
