@@ -109,9 +109,9 @@ Tests: 366 passed, 16 subtests. The one remaining SyntaxWarning (line 1 of
 
 ## Cleanup chores (unchanged from last session)
 
-- `~/.zshrc`'s `chrome-debug` alias still uses the broken default-profile
-  command. The user needs to edit it by hand (Claude can't write dotfiles)
-  to match the command in "Start here" above.
+- ~~`~/.zshrc`'s `chrome-debug` alias~~: fixed 2026-09-28. It now launches
+  the dedicated debug profile in the background, so `chrome-debug` is the
+  way to start Chrome for the cart filler.
 - `README.md` "First-time Chrome setup" (~line 303) and
   `docs/walmart-cart-next-steps.md` still describe the broken approach.
   Now that the cart flow is proven, update both to the dedicated-profile
