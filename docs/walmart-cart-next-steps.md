@@ -1,5 +1,9 @@
 # Walmart Cart — Next Steps
 
+> **Update 2026-09-28:** This plan is implemented. It's kept here as design history. For current setup, see the README's "Walmart cart filling" section. Two corrections to what's below:
+> - Chrome 136+ ignores `--remote-debugging-port` on the default profile, so the alias needs a dedicated `--user-data-dir`. The alias below is the corrected one.
+> - CDP to real Chrome is *not* undetectable: Walmart still shows "Robot or human?" checks sometimes. The filler detects them and asks the user to press & hold (see README).
+
 ## Problem
 
 Playwright's bundled Chromium triggers Walmart's bot detection ("Robot or human?" CAPTCHA). `playwright-stealth` + `channel="chrome"` did not resolve it.
@@ -15,7 +19,7 @@ Connect to the user's actual running Chrome instance via Chrome DevTools Protoco
 Add to `~/.zshrc`:
 
 ```bash
-alias chrome-debug='/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --profile-directory=Default &'
+alias chrome-debug='nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-debug-profile" --profile-directory=Default > /dev/null 2>&1 &'
 ```
 
 Run `chrome-debug` once before running `python main.py cart`. Chrome opens normally; you stay logged into Walmart as usual.

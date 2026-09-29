@@ -216,7 +216,7 @@ class CartFiller:
         self.max_iterations = 150   # ~3 tool calls per item × 50 items
         # How long to wait for the user to solve Walmart's "press & hold"
         # human check in the Chrome window before giving up on the run.
-        self.human_check_timeout_s = int(config.get("walmart_human_check_timeout_s", 180))
+        self.human_check_timeout_s = int(config.get("human_check_timeout_s", 180))
         self._blocked = False
         self._last_results: list[dict] = []   # most recent search_walmart results
 

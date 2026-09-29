@@ -298,17 +298,17 @@ The planner selects from this list. If the file is missing or empty, no lunch is
 python main.py cart --week YYYY-MM-DD
 ```
 
-Connects to your running Chrome instance and adds the week's grocery items to your Walmart cart. Because it uses your real Chrome session, Walmart sees a normal browser — no bot detection issues.
+Connects to a Chrome window running with remote debugging and adds the week's grocery items to your Walmart cart. It only adds items. It never removes anything or checks out, so review the cart yourself before ordering.
 
 ### First-time Chrome setup
 
 **Add the `chrome-debug` alias to `~/.zshrc`:**
 
 ```bash
-alias chrome-debug='/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --profile-directory=Default &'
+alias chrome-debug='nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-debug-profile" --profile-directory=Default > /dev/null 2>&1 &'
 ```
 
-> **Note:** If Chrome is already open, quit it first before running `chrome-debug`. Running the alias while Chrome is open starts a second instance — the existing one does not gain a debug port.
+> **Why a separate profile:** Chrome 136+ ignores `--remote-debugging-port` when launched on your default profile ([details](https://developer.chrome.com/blog/remote-debugging-port)), so the alias uses its own profile directory, `~/.chrome-debug-profile`. It runs alongside your normal Chrome, so there's no need to quit Chrome first, and it keeps its own logins between runs.
 
 Then reload your shell:
 
@@ -320,17 +320,30 @@ source ~/.zshrc
 
 ```bash
 chrome-debug        # opens Chrome with remote debugging on port 9222
+curl -s http://localhost:9222/json/version   # check: should print JSON
 ```
 
-Log into Walmart in that Chrome window. You only need to do this once — your session is preserved.
+Log into Walmart in that Chrome window. You only need to do this once — the debug profile keeps your session.
 
 **Every subsequent run:**
 
-Start Chrome with `chrome-debug`, then run the cart command:
+Start Chrome with `chrome-debug` (skip this if it's still open), then run the cart command:
 
 ```bash
 python main.py cart --week YYYY-MM-DD
 ```
+
+A run takes a few minutes. Each search and add-to-cart is logged, so you can see exactly what was picked.
+
+### "Robot or human?" checks
+
+Walmart sometimes shows a **press & hold** check instead of search results. The cart filler doesn't try to get around it. Instead it stops and prints:
+
+```
+⚠️  Walmart is showing a 'press & hold' human check in the Chrome window.
+```
+
+Press and hold the button in the Chrome window, and the run carries on. If nobody solves it within `walmart.human_check_timeout_s` seconds (default 180, set in `config.yaml`), the run stops searching and reports the remaining items as not found. To make these checks less frequent, always use the same logged-in debug profile and avoid running the cart fill several times back to back.
 
 ---
 

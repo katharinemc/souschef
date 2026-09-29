@@ -73,3 +73,4 @@ reply_handler:
 walmart:
   enabled: false            # Set to true to activate cart filling
   cdp_url: "http://localhost:9222"   # Connect to Chrome with: chrome-debug (see README)
+  human_check_timeout_s: 180         # How long to wait for you to solve a "press & hold" check

@@ -73,7 +73,7 @@ The filler does **not** try to bypass it. That would mean defeating
 Walmart's bot detection, which is against their terms and gets accounts
 flagged. Instead (commit `7a079b5`), when a search hits the check, it prints
 a prompt asking the user to press and hold in the Chrome window, waits up
-to `walmart_human_check_timeout_s` (default 180, settable in config), and
+to `walmart.human_check_timeout_s` (default 180, in `config.yaml`), and
 then continues. If nobody solves it, it tells the agent to stop and report the
 remaining items as not found, instead of re-searching into the wall. Live-verified.
 
@@ -112,11 +112,9 @@ Tests: 366 passed, 16 subtests. The one remaining SyntaxWarning (line 1 of
 - ~~`~/.zshrc`'s `chrome-debug` alias~~: fixed 2026-09-28. It now launches
   the dedicated debug profile in the background, so `chrome-debug` is the
   way to start Chrome for the cart filler.
-- `README.md` "First-time Chrome setup" (~line 303) and
-  `docs/walmart-cart-next-steps.md` still describe the broken approach.
-  Now that the cart flow is proven, update both to the dedicated-profile
-  command. Also document the human-check prompt and
-  `walmart_human_check_timeout_s`.
+- ~~README Chrome setup / `walmart-cart-next-steps.md`~~: fixed
+  2026-09-28. Both now use the dedicated-profile command, and the README
+  documents the human-check prompt and `walmart.human_check_timeout_s`.
 - Backlog in `docs/next-steps.md`: re-evaluate "Walmart quantity-aware
   search". Prices now reach the agent, but it still picks one package per
   line with no reasoning about quantity.
