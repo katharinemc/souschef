@@ -286,11 +286,7 @@ def cmd_plan(args, cfg: dict, flat: dict):
 
     dry_run = args.dry_run
     use_legacy = getattr(args, "legacy", False)
-
-    # Email stub
-    if getattr(args, "email", False):
-        print("Email delivery not yet enabled in Phase 1.")
-        return
+    use_email = getattr(args, "email", False)
 
     # Determine planning week
     reader = CalendarReader(config=flat, timezone=flat.get("timezone", "America/New_York"))
@@ -330,6 +326,10 @@ def cmd_plan(args, cfg: dict, flat: dict):
 
     # Build grocery list
     grocery = GroceryBuilder(store=store).build(plan)
+
+    if use_email:
+        _send_plan_email(plan, grocery, stacking_notes, store, flat, dry_run)
+        return
 
     # Print plan to terminal
     print_plan(plan, grocery, stacking_notes)
@@ -556,6 +556,43 @@ def cmd_rate(args, cfg: dict, flat: dict):
         print(f"Rated '{recipe['name']}' {stars} stars.")
 
     store.close()
+
+
+def _send_plan_email(plan, grocery, stacking_notes, store, flat: dict, dry_run: bool) -> None:
+    """
+    Phase 3 delivery for `plan --email`: save the plan as a draft, then email
+    it. The terminal reply loop is skipped — the user's reply to the email,
+    picked up by `main.py reply`, approves or amends the draft instead.
+    """
+    from email_sender import EmailSender
+
+    if not dry_run:
+        # Save before sending so a failed send still leaves a draft that can
+        # be re-sent, amended, or confirmed from the terminal.
+        store.record_plan(plan.week_key, plan.to_dict(), plan.to_state_meals())
+        log.info("Plan saved to database (week key: %s)", plan.week_key)
+
+    sender = EmailSender(config=flat, dry_run=dry_run)
+    try:
+        sender.send_plan(plan, grocery, stacking_notes)
+    except Exception as e:
+        store.close()
+        log.error("Sending plan email failed: %s", e)
+        print(f"\nCouldn't email the plan: {e}")
+        print(
+            "The plan is saved as a draft. Fix the problem and run "
+            "`python main.py plan --email` again, or finish in the terminal "
+            "with `python main.py amend --message ...` / `python main.py confirm`."
+        )
+        sys.exit(1)
+    store.close()
+
+    if dry_run:
+        print("\nDry run — email not sent, plan not saved.")
+        return
+    print(f"\nPlan for week of {plan.week_key} emailed to {flat.get('to_address')}.")
+    print("Reply to that email with changes (or \"looks good\"), then run:")
+    print("  python main.py reply --once")
 
 
 def cmd_reply(args, cfg: dict, flat: dict):
@@ -819,7 +856,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_plan.add_argument(
         "--email", action="store_true",
-        help="[Phase 3] Send plan by email instead of printing to terminal"
+        help="Email the plan instead of printing it; reply to the email, then run `reply --once`"
     )
     p_plan.set_defaults(func=cmd_plan)
 

@@ -194,5 +194,94 @@ class TestCmdConfirm(CmdAmendConfirmTestCase):
             store.close()
 
 
+class TestCmdPlanEmail(unittest.TestCase):
+    """
+    `plan --email` (Phase 3): same planning pipeline as the terminal path,
+    but the plan goes out by email and the reply loop is skipped — the
+    user's email reply, processed by `main.py reply`, replaces it.
+    Calendar, planner, stacker, grocery builder and Gmail are all patched.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.addCleanup(lambda: Path(self.tmp.name).unlink(missing_ok=True))
+        self.plan = make_plan()
+        self.flat = {
+            "db_path": self.tmp.name,
+            "recipe_dir": "recipes_yaml",
+            "model": "test-model",
+            "to_address": "me@example.com",
+        }
+
+    def _run(self, dry_run=False, send_side_effect=None):
+        reader = MagicMock()
+        reader.next_planning_monday.return_value = self.plan.week_start_monday
+        planner = MagicMock()
+        planner.plan_week.return_value = self.plan
+        sender = MagicMock()
+        sender.send_plan.side_effect = send_side_effect
+        self.grocery = MagicMock()
+        self.notes = [MagicMock()]
+
+        args = SimpleNamespace(dry_run=dry_run, legacy=False, email=True)
+        with patch("calendar_reader.CalendarReader", return_value=reader), \
+             patch("agentic_planner.AgenticPlanner", return_value=planner), \
+             patch("stacker.Stacker") as stacker_cls, \
+             patch("grocery_builder.GroceryBuilder") as gb_cls, \
+             patch("output_formatter.print_plan") as self.print_plan, \
+             patch("email_sender.EmailSender", return_value=sender) as self.sender_cls, \
+             patch.object(main, "_review_last_week") as self.review, \
+             patch("builtins.input") as self.input, \
+             patch("builtins.print") as self.print_:
+            stacker_cls.return_value.analyse.return_value = self.notes
+            gb_cls.return_value.build.return_value = self.grocery
+            main.cmd_plan(args, {}, self.flat)
+        return sender
+
+    def _printed(self):
+        return " ".join(" ".join(map(str, c.args)) for c in self.print_.call_args_list)
+
+    def _stored_status(self):
+        store = StateStore(self.tmp.name)
+        try:
+            return store.get_plan(self.plan.week_key), store.is_plan_approved(self.plan.week_key)
+        finally:
+            store.close()
+
+    def test_sends_plan_saves_draft_and_skips_reply_loop(self):
+        sender = self._run()
+        sender.send_plan.assert_called_once_with(self.plan, self.grocery, self.notes)
+        self.sender_cls.assert_called_once_with(config=self.flat, dry_run=False)
+        plan_dict, approved = self._stored_status()
+        self.assertIsNotNone(plan_dict)
+        self.assertFalse(approved)          # approval comes from the email reply
+        self.input.assert_not_called()      # no terminal reply loop
+        self.print_plan.assert_not_called() # emailed instead of printed
+        self.assertIn("me@example.com", self._printed())
+        self.assertIn("reply --once", self._printed())
+
+    def test_still_runs_last_week_review(self):
+        self._run()
+        self.review.assert_called_once()
+
+    def test_dry_run_prints_email_without_sending_or_saving(self):
+        sender = self._run(dry_run=True)
+        self.sender_cls.assert_called_once_with(config=self.flat, dry_run=True)
+        sender.send_plan.assert_called_once()   # dry-run sender prints instead of sending
+        plan_dict, _ = self._stored_status()
+        self.assertIsNone(plan_dict)
+
+    def test_send_failure_keeps_draft_and_explains(self):
+        with self.assertRaises(SystemExit) as cm:
+            self._run(send_side_effect=RuntimeError("403 insufficient scopes"))
+        self.assertEqual(cm.exception.code, 1)
+        plan_dict, approved = self._stored_status()
+        self.assertIsNotNone(plan_dict)     # draft survives so it can be retried/amended
+        self.assertFalse(approved)
+        out = self._printed()
+        self.assertIn("403 insufficient scopes", out)
+        self.assertIn("confirm", out)
+
+
 if __name__ == "__main__":
     unittest.main()

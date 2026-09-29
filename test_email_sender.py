@@ -393,5 +393,60 @@ class TestDryRun(unittest.TestCase):
             sender.send_plan(plan, grocery, [])
 
 
+# ---------------------------------------------------------------------------
+# Gmail auth scopes (no network)
+# ---------------------------------------------------------------------------
+
+class TestGmailScopes(unittest.TestCase):
+    """
+    token.json is shared with calendar_reader, which only asks for
+    calendar.readonly. Such a token is still `valid` (not expired), so
+    _get_service used to accept it and the first send failed with a 403.
+    It must re-authorise when the token lacks the Gmail scopes.
+    """
+
+    def _get_service(self, token_scopes_ok: bool):
+        import tempfile, os
+        from unittest.mock import MagicMock, patch
+        d = tempfile.mkdtemp()
+        token = os.path.join(d, "token.json")
+        creds_file = os.path.join(d, "credentials.json")
+        for p in (token, creds_file):
+            with open(p, "w") as f:
+                f.write("{}")
+
+        existing = MagicMock(valid=True)
+        existing.has_scopes.return_value = token_scopes_ok
+        fresh = MagicMock()
+        fresh.to_json.return_value = "{}"
+        flow = MagicMock()
+        flow.run_local_server.return_value = fresh
+
+        sender = EmailSender(config={"token_path": token, "credentials_path": creds_file})
+        with patch("google.oauth2.credentials.Credentials.from_authorized_user_file",
+                   return_value=existing) as self.load, \
+             patch("google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file",
+                   return_value=flow) as from_secrets, \
+             patch("googleapiclient.discovery.build") as build:
+            sender._get_service()
+        return existing, from_secrets, build
+
+    def test_calendar_only_token_triggers_reauth_with_gmail_scopes(self):
+        from email_sender import ALL_SCOPES
+        existing, from_secrets, build = self._get_service(token_scopes_ok=False)
+        existing.has_scopes.assert_called_with(ALL_SCOPES)
+        # A scopes argument would override the file's granted scopes and
+        # make has_scopes() always true.
+        self.assertEqual(len(self.load.call_args.args), 1)
+        self.assertNotIn("scopes", self.load.call_args.kwargs)
+        from_secrets.assert_called_once()
+        self.assertEqual(from_secrets.call_args.args[1], ALL_SCOPES)
+
+    def test_token_with_gmail_scopes_is_used_as_is(self):
+        existing, from_secrets, build = self._get_service(token_scopes_ok=True)
+        from_secrets.assert_not_called()
+        self.assertIs(build.call_args.kwargs["credentials"], existing)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -363,7 +363,17 @@ class EmailSender:
         creds_path = self.cfg["credentials_path"]
 
         if os.path.exists(token_path):
-            creds = Credentials.from_authorized_user_file(token_path, ALL_SCOPES)
+            # Load WITHOUT a scopes argument: passing one overrides the
+            # scopes recorded in the file, so has_scopes() would just compare
+            # the requested list with itself (live-verified 2026-09-28).
+            creds = Credentials.from_authorized_user_file(token_path)
+            # token.json is shared with calendar_reader, which only requests
+            # calendar.readonly. Such a token is still valid, so without this
+            # check the first send fails with a 403 instead of prompting to
+            # re-authorise with the Gmail scopes.
+            if not creds.has_scopes(ALL_SCOPES):
+                log.info("Saved Google token lacks Gmail access — re-authorising.")
+                creds = None
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
