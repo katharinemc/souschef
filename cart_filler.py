@@ -458,8 +458,21 @@ class CartFiller:
         return "\n".join(lines)
 
     def _parse_finish_cart(self, tool_input: dict, pantry_staples: list[str]) -> CartResult:
+        # Live-verified 2026-09-28: the API doesn't enforce the schema's
+        # "required" list, and claude-sonnet-5 omitted status → TypeError
+        # after every item was already in the cart. The bucket key *is* the
+        # status, so derive it; keep only known fields so stray keys can't
+        # crash it either.
         def _items(key: str) -> list[CartItem]:
-            return [CartItem(**{k: v for k, v in i.items()}) for i in tool_input.get(key, [])]
+            return [
+                CartItem(
+                    name=i.get("name", ""),
+                    status=key,
+                    walmart_name=i.get("walmart_name"),
+                    note=i.get("note"),
+                )
+                for i in tool_input.get(key, [])
+            ]
         return CartResult(
             added=_items("added"),
             needs_review=_items("needs_review"),

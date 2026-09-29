@@ -170,6 +170,24 @@ class TestCartFillerHelpers(unittest.TestCase):
         self.assertIn("ground beef", prompt)
         self.assertIn("onion", prompt)
 
+    def test_parse_finish_cart_tolerates_missing_status_and_extra_keys(self):
+        # Live 2026-09-28: claude-sonnet-5 omitted the schema-"required"
+        # status field in finish_cart → CartItem.__init__ TypeError crashed
+        # the whole run after every item had already been added.
+        filler = self._make_filler("ground beef")
+        result = filler._parse_finish_cart({
+            "added":        [{"name": "ground beef", "walmart_name": "GV 80/20 Beef"}],
+            "needs_review": [{"name": "onion", "note": "3 options", "status": "needs_review"}],
+            "skipped":      [{"name": "milk", "reason": "already in cart"}],
+            "not_found":    [{"name": "sumac"}],
+        }, pantry_staples=["salt"])
+        self.assertEqual(result.added[0].status, "added")
+        self.assertEqual(result.added[0].walmart_name, "GV 80/20 Beef")
+        self.assertEqual(result.needs_review[0].note, "3 options")
+        self.assertEqual(result.skipped[0].status, "skipped")
+        self.assertEqual(result.not_found[0].status, "not_found")
+        self.assertEqual(result.pantry_staples, ["salt"])
+
 
 # ---------------------------------------------------------------------------
 # CartFiller agent loop (mocked Anthropic + mocked Playwright page)
