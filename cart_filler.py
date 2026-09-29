@@ -214,6 +214,10 @@ class CartFiller:
         self.cdp_url     = config.get("cdp_url", "http://localhost:9222")
         self.grocery     = grocery
         self.max_iterations = 150   # ~3 tool calls per item × 50 items
+        # How long to wait for the user to solve Walmart's "press & hold"
+        # human check in the Chrome window before giving up on the run.
+        self.human_check_timeout_s = int(config.get("walmart_human_check_timeout_s", 180))
+        self._blocked = False
         self._last_results: list[dict] = []   # most recent search_walmart results
 
     async def fill(self) -> CartResult:
@@ -353,21 +357,58 @@ class CartFiller:
     # -----------------------------------------------------------------------
 
     async def _search_walmart(self, page, query: str, quantity: str = "") -> str:
+        if self._blocked:
+            return self._blocked_message()
+
         url = f"https://www.walmart.com/search?q={quote(query)}"
         await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
 
-        results = await page.evaluate("""() => {
+        # Live-verified 2026-09-28: results normally render <1s after
+        # domcontentloaded, so wait for tiles rather than a fixed sleep. When
+        # none appear it's usually Walmart's "press & hold" robot check, not
+        # an empty search — the old fallback (inner_text("main"), 30s default
+        # timeout, no <main> on that page) turned each one into a 30s stall
+        # reported as "No results", and the agent kept re-searching into it.
+        if not await self._wait_for_tiles(page, 10_000):
+            if not await self._is_human_check(page):
+                return f"No products found for '{query}'."
+            print(
+                "\n⚠️  Walmart is showing a 'press & hold' human check in the Chrome window.\n"
+                f"   Please press and hold the button there — waiting up to "
+                f"{self.human_check_timeout_s // 60} min...\n", flush=True,
+            )
+            log.warning("Walmart human check on search '%s' — waiting for user.", query)
+            if not await self._wait_for_tiles(page, self.human_check_timeout_s * 1000):
+                self._blocked = True
+                log.error("Human check not completed within %ds — stopping searches.",
+                          self.human_check_timeout_s)
+                return self._blocked_message()
+            log.info("Human check cleared — continuing.")
+
+        results = await page.evaluate(r"""() => {
             const out = [];
             const tiles = document.querySelectorAll('[data-item-id]');
             tiles.forEach((tile, i) => {
                 if (i >= 6) return;
-                const nameEl  = tile.querySelector('[data-automation-id="product-title"], a[link-identifier]');
-                const priceEl = tile.querySelector('[itemprop="price"]');
+                // Live-verified 2026-09-28: querySelector with a selector
+                // list returns the first match in document order, which was
+                // the link — its text carries "Bought 5+ times, " / "Rollback, "
+                // prefixes. product-title holds the clean name. itemprop=price
+                // no longer exists; the price is in product-price text
+                // ("current price $4.48") or a "Price $ 3.30 ..." aria-label.
+                const nameEl  = tile.querySelector('[data-automation-id="product-title"]')
+                             || tile.querySelector('a[link-identifier]');
+                const priceEl = tile.querySelector('[data-automation-id="product-price"], [aria-label^="Price"]');
                 const sizeEl  = tile.querySelector('[data-automation-id="product-description"]');
                 const inCart  = tile.querySelector('[data-automation-id="fulfillment-badge"]');
                 const name    = nameEl  ? nameEl.textContent.trim()            : null;
-                const price   = priceEl ? '$' + priceEl.getAttribute('content') : '?';
+                let price = '?';
+                if (priceEl) {
+                    const src = (priceEl.getAttribute('aria-label') || '') + ' ' + priceEl.textContent;
+                    const m = src.match(/current price (?:Now )?\$\s?([\d,]+\.\d{2})/i)
+                           || src.match(/Price \$\s?([\d,]+\.\d{2})/);
+                    if (m) price = '$' + m[1];
+                }
                 const size    = sizeEl  ? sizeEl.textContent.trim()            : '';
                 const badge   = inCart  ? inCart.textContent.trim()            : '';
                 const item_id = tile.getAttribute('data-item-id');
@@ -379,12 +420,7 @@ class CartFiller:
         self._last_results = results
 
         if not results:
-            # Fallback: return a snippet of visible page text
-            try:
-                text = await page.inner_text("main")
-                return f"No structured results for '{query}'. Page text:\n{text[:1500]}"
-            except Exception:
-                return f"No results found for '{query}'."
+            return f"No products found for '{query}'."
 
         lines = [f"Results for '{query}'" + (f" (want: {quantity})" if quantity else "") + ":"]
         for r in results:
@@ -431,10 +467,20 @@ class CartFiller:
         )
 
         if btn is None:
-            # Check if already in cart
-            in_cart = await tile.query_selector('button:has-text("In cart"), [data-automation-id="in-cart-btn"]')
+            # Live-verified 2026-09-28 (cart page): an in-cart item shows a
+            # quantity stepper — data-testid="quantity-stepper-inc-button",
+            # aria-label "Increase quantity <name>, Current Quantity N" — not
+            # an "In cart" button. Old selectors kept as fallback.
+            in_cart = await tile.query_selector(
+                '[data-testid="quantity-stepper-inc-button"], '
+                'button[aria-label^="Increase quantity"], '
+                'button:has-text("In cart"), [data-automation-id="in-cart-btn"]'
+            )
             if in_cart:
-                return f"Already in cart: {chosen['name']}"
+                label = await in_cart.get_attribute("aria-label")
+                m = re.search(r"Current Quantity (\d+)", label) if isinstance(label, str) else None
+                qty = f" (qty {m.group(1)})" if m else ""
+                return f"Already in cart{qty}: {chosen['name']}"
             return f"No 'Add to cart' button found for: {chosen['name']}"
 
         # force=True: live-verified 2026-09-18 that a plain click times out
@@ -449,6 +495,35 @@ class CartFiller:
     # -----------------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------------
+
+    async def _wait_for_tiles(self, page, timeout_ms: int) -> bool:
+        try:
+            await page.wait_for_selector("[data-item-id]", timeout=timeout_ms)
+            return True
+        except Exception:
+            return False
+
+    async def _is_human_check(self, page) -> bool:
+        # Walmart's bot wall (title "Robot or human?", "Press & Hold"
+        # button, sometimes a /blocked URL). Live-verified 2026-09-28 that
+        # this fires on the real wall and not on a normal results page.
+        try:
+            title = await page.title()
+            text  = await page.inner_text("body", timeout=3000)
+        except Exception:
+            return False
+        haystack = f"{page.url} {title} {text[:2000]}".lower()
+        return any(k in haystack for k in (
+            "robot or human", "press & hold", "press and hold", "/blocked", "confirm you are human",
+        ))
+
+    def _blocked_message(self) -> str:
+        return (
+            "BLOCKED: Walmart's human-verification check was not completed, so "
+            "searching is unavailable for the rest of this run. Do not retry. "
+            "Call finish_cart now: report items already added as added, and every "
+            "remaining item as not_found with note 'blocked by Walmart human check'."
+        )
 
     def _split_items(self) -> tuple[list, list[str]]:
         buy, staples = [], []

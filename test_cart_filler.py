@@ -383,6 +383,81 @@ class TestCartFillerAgentLoop(unittest.IsolatedAsyncioTestCase):
         result = await filler._add_to_cart(page, 1)
         self.assertIn("no result at index", result)
 
+    # --- search page readiness / Walmart human check (live 2026-09-28) ---
+    # Walmart intermittently serves a "press & hold" robot check instead of
+    # results. The old code slept 2s, found no tiles, then inner_text("main")
+    # waited out a 30s default on a page with no <main> and reported "No
+    # results" — 9 of 27 searches in one run, ~4.5 of its 7 minutes, and
+    # the agent kept re-searching into the same wall.
+
+    def _no_tiles_page(self, challenge: bool):
+        page = self._mock_page()
+        page.url = "https://www.walmart.com/blocked?url=x" if challenge else "https://www.walmart.com/search?q=x"
+        page.title = AsyncMock(return_value="Robot or human?" if challenge else "x - Walmart.com")
+        page.inner_text = AsyncMock(return_value="Press & Hold" if challenge else "No results for x")
+        page.evaluate = AsyncMock(return_value=[])
+        return page
+
+    async def test_search_waits_for_tiles_instead_of_fixed_sleep(self):
+        filler = self._make_filler()
+        page = self._mock_page()
+        result = await filler._search_walmart(page, "ground beef")
+        page.wait_for_selector.assert_awaited()
+        page.wait_for_timeout.assert_not_awaited()
+        self.assertIn("Great Value Ground Beef", result)
+
+    async def test_search_no_tiles_without_challenge_reports_no_products(self):
+        filler = self._make_filler()
+        page = self._no_tiles_page(challenge=False)
+        page.wait_for_selector = AsyncMock(side_effect=Exception("Timeout"))
+        result = await filler._search_walmart(page, "sumac")
+        self.assertIn("No products found for 'sumac'", result)
+        self.assertNotIn("human", result.lower())
+
+    async def test_search_challenge_waits_for_human_then_returns_results(self):
+        filler = self._make_filler()
+        page = self._no_tiles_page(challenge=True)
+        # first wait (normal) times out; second (waiting on the human) succeeds
+        page.wait_for_selector = AsyncMock(side_effect=[Exception("Timeout"), None])
+        page.evaluate = AsyncMock(return_value=[
+            {"index": 0, "item_id": "1", "name": "GV Ground Beef", "price": "$5.98", "size": "", "badge": ""},
+        ])
+        with patch("builtins.print") as mock_print:
+            result = await filler._search_walmart(page, "ground beef")
+        self.assertIn("GV Ground Beef", result)
+        self.assertIn("press", " ".join(str(c) for c in mock_print.call_args_list).lower())
+        self.assertEqual(page.wait_for_selector.await_args_list[1].kwargs["timeout"],
+                         filler.human_check_timeout_s * 1000)
+
+    async def test_search_challenge_unsolved_tells_agent_to_stop(self):
+        filler = self._make_filler()
+        page = self._no_tiles_page(challenge=True)
+        page.wait_for_selector = AsyncMock(side_effect=Exception("Timeout"))
+        with patch("builtins.print"):
+            result = await filler._search_walmart(page, "ground beef")
+        self.assertIn("BLOCKED", result)
+        self.assertIn("finish_cart", result)
+
+    async def test_add_to_cart_detects_quantity_stepper_as_in_cart(self):
+        # Live 2026-09-28: an item already in the cart shows a quantity
+        # stepper (data-testid="quantity-stepper-inc-button", aria-label
+        # "Increase quantity <name>, Current Quantity 1"), not an "In cart"
+        # button — so the old check fell through to "No 'Add' button found".
+        filler = self._make_filler()
+        page = self._mock_page()
+        await filler._search_walmart(page, "ground beef")
+
+        stepper = AsyncMock()
+        stepper.get_attribute = AsyncMock(
+            return_value="Increase quantity Great Value Ground Beef 1lb, Current Quantity 2")
+        mock_tile = AsyncMock()
+        mock_tile.query_selector = AsyncMock(side_effect=[None, stepper])
+        page.query_selector_all = AsyncMock(return_value=[mock_tile])
+
+        result = await filler._add_to_cart(page, 0)
+        self.assertIn("Already in cart", result)
+        self.assertIn("qty 2", result)
+
     async def test_add_to_cart_reports_already_in_cart(self):
         from cart_filler import CartFiller
         filler = self._make_filler()
