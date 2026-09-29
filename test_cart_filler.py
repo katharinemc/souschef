@@ -346,6 +346,43 @@ class TestCartFillerAgentLoop(unittest.IsolatedAsyncioTestCase):
         mock_button.click.assert_awaited_once()
         self.assertIn("Added to cart", result)
 
+    async def test_add_to_cart_uses_displayed_index_not_list_position(self):
+        # Live 2026-09-28: search skips title-less tiles, so displayed
+        # indices can have gaps (0, 2, ...). _add_to_cart looked up the
+        # product by list position, so it reported a different product than
+        # the one it clicked — the agent then re-added "the right" milk,
+        # ending with 4 milks for 2 list lines. It must resolve the
+        # displayed index and click that exact tile by its item id.
+        filler = self._make_filler()
+        page = self._mock_page()
+        page.evaluate = AsyncMock(return_value=[
+            {"index": 0, "item_id": "111", "name": "Lactaid 2% Milk", "price": "$4", "size": "", "badge": ""},
+            {"index": 2, "item_id": "333", "name": "GV Whole Milk, Gallon", "price": "$3", "size": "", "badge": ""},
+        ])
+        await filler._search_walmart(page, "whole milk")
+
+        mock_button = AsyncMock()
+        mock_tile = AsyncMock()
+        mock_tile.query_selector = AsyncMock(return_value=mock_button)
+        page.query_selector = AsyncMock(return_value=mock_tile)
+
+        result = await filler._add_to_cart(page, 2)
+
+        page.query_selector.assert_awaited_with('[data-item-id="333"]')
+        mock_button.click.assert_awaited_once()
+        self.assertIn("GV Whole Milk, Gallon", result)
+
+    async def test_add_to_cart_rejects_index_not_in_results(self):
+        filler = self._make_filler()
+        page = self._mock_page()
+        page.evaluate = AsyncMock(return_value=[
+            {"index": 0, "item_id": "111", "name": "A", "price": "$1", "size": "", "badge": ""},
+            {"index": 2, "item_id": "333", "name": "B", "price": "$1", "size": "", "badge": ""},
+        ])
+        await filler._search_walmart(page, "x")
+        result = await filler._add_to_cart(page, 1)
+        self.assertIn("no result at index", result)
+
     async def test_add_to_cart_reports_already_in_cart(self):
         from cart_filler import CartFiller
         filler = self._make_filler()

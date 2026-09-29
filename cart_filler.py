@@ -338,10 +338,15 @@ class CartFiller:
 
     async def _execute_tool(self, page, tool_call) -> str:
         if tool_call.name == "search_walmart":
-            return await self._search_walmart(page, **tool_call.input)
-        if tool_call.name == "add_to_cart":
-            return await self._add_to_cart(page, **tool_call.input)
-        return f"Unknown tool: {tool_call.name}"
+            result = await self._search_walmart(page, **tool_call.input)
+        elif tool_call.name == "add_to_cart":
+            result = await self._add_to_cart(page, **tool_call.input)
+        else:
+            result = f"Unknown tool: {tool_call.name}"
+        # Without this, a live run's log shows only API round-trips — no way
+        # to tell which product the agent picked or what the page returned.
+        log.info("tool %s %s -> %s", tool_call.name, tool_call.input, result)
+        return result
 
     # -----------------------------------------------------------------------
     # Playwright tool implementations
@@ -365,7 +370,8 @@ class CartFiller:
                 const price   = priceEl ? '$' + priceEl.getAttribute('content') : '?';
                 const size    = sizeEl  ? sizeEl.textContent.trim()            : '';
                 const badge   = inCart  ? inCart.textContent.trim()            : '';
-                if (name) out.push({ index: i, name, price, size, badge });
+                const item_id = tile.getAttribute('data-item-id');
+                if (name) out.push({ index: i, item_id, name, price, size, badge });
             });
             return out;
         }""")
@@ -392,16 +398,25 @@ class CartFiller:
         return "\n".join(lines)
 
     async def _add_to_cart(self, page, result_index: int) -> str:
-        if not self._last_results or result_index >= len(self._last_results):
+        # Live-verified 2026-09-28: the displayed index is the DOM tile index
+        # and can have gaps (title-less tiles are skipped), so it must be
+        # resolved against r["index"], not list position — otherwise the
+        # tool clicked one product and reported another, and the agent
+        # "corrected" by adding more (4 milks for 2 list lines). Click the
+        # tile by its item id too, since lazy-loaded carousels can shift
+        # DOM positions between search and add.
+        chosen = next((r for r in (self._last_results or []) if r["index"] == result_index), None)
+        if chosen is None:
             return f"Error: no result at index {result_index}. Run search_walmart first."
 
-        chosen = self._last_results[result_index]
-        tiles  = await page.query_selector_all('[data-item-id]')
+        if chosen.get("item_id"):
+            tile = await page.query_selector(f'[data-item-id="{chosen["item_id"]}"]')
+        else:
+            tiles = await page.query_selector_all('[data-item-id]')
+            tile = tiles[result_index] if result_index < len(tiles) else None
 
-        if result_index >= len(tiles):
+        if tile is None:
             return f"Could not locate tile for index {result_index} — page may have changed."
-
-        tile = tiles[result_index]
         # Walmart's automation-id and button text have both changed over time
         # (confirmed live 2026-09-18: current markup is
         # data-automation-id="add-to-cart" with visible text just "Add", not
