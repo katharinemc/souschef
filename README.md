@@ -259,13 +259,24 @@ python main.py preview
 
 Runs the full pipeline (calendar read, planning, grocery build) and prints the formatted output. Does not enter the reply loop or save anything.
 
-### Poll for email replies
+### Email the plan instead (Phase 3, in testing)
 
 ```bash
-python main.py reply
+python main.py plan --email             # plan next week and email it
+python main.py --dry-run plan --email   # print the email; nothing sent or saved
 ```
 
-Polls the configured inbox for replies to a sent plan and triggers re-plans. Used in Phase 3 (email delivery, not yet enabled).
+Plans the same way as `plan`, saves the plan as a draft, and emails it to `email.to_address` instead of printing it. There's no terminal reply loop. Reply to the email instead, then run:
+
+```bash
+python main.py reply --once
+```
+
+This checks your inbox once for a reply. A change ("swap Tuesday for pasta") is applied, and a revised plan is emailed back. "Looks good" approves the plan. Without `--once`, `reply` checks every hour, but only on Thursdays. On any other day it exits right away, so use `--once` for now.
+
+**First-time Gmail setup:** turn on the **Gmail API** in the same Google Cloud project as your calendar access. The first real `plan --email` then opens a browser asking you to approve sending and reading Gmail as well, because your saved Google login only covers the calendar.
+
+If sending fails, the draft is kept. Fix the problem and rerun, or finish in the terminal with `amend` / `confirm`.
 
 ### Amend or confirm a draft plan
 
